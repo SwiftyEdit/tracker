@@ -1,0 +1,24 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs / editors
+.idea/
+.vscode/
+*.iml
+
+# Runtime database (created on first install; /data/ itself must stay
+# so PDO has a directory to write tracker.sqlite3 into)
+/data/*.sqlite3
+/data/*.sqlite
+
+# Admin-uploaded GeoIP CSV snapshot (see install/geoip-import.php); /data/geoip/
+# itself must stay so an upload has somewhere to land.
+/data/geoip/*
+!/data/geoip/.gitkeep
+
+# Release build artifacts (attach to GitHub Releases instead of committing)
+/*.zip
+
+# Logs
+*.log

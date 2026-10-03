@@ -1,0 +1,35 @@
+{
+  "addon": {
+    "id": "tracker",
+    "name": "Tracker",
+    "type": "plugin",
+    "version": "1.0.0",
+    "build": 1,
+    "author": "SwiftyEdit Developer Team",
+    "description": "Self-hosted, privacy-friendly statistics: pageviews, referrers, browsers, devices and campaign sources - captured server-side with zero frontend footprint.",
+    "database": "tracker.sqlite3",
+    "update_url": "https://raw.githubusercontent.com/SwiftyEdit/tracker/main/info.json"
+  },
+  "versions": [
+    {
+      "version": "1.0.0",
+      "build": 1,
+      "requires_build": "26-0183",
+      "download_url": "https://github.com/SwiftyEdit/tracker/releases/download/v1.0.0/tracker-1.0.0.zip"
+    }
+  ],
+  "navigation": [
+    {
+      "text": "nav_overview",
+      "file": "start"
+    },
+    {
+      "text": "nav_settings",
+      "file": "settings"
+    },
+    {
+      "text": "nav_docs",
+      "file": "docs"
+    }
+  ]
+}
