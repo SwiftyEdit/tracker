@@ -52,6 +52,13 @@ function tr_render_bot_card(string $message = ''): string {
         .$addon_lang['label_reason_no_ua'].$count_badge('no_ua')
         .'</div>';
 
+    $h .= '<div class="form-check form-switch mb-1">';
+    $h .= '<input class="form-check-input" type="checkbox" role="switch" id="trBotOutdatedFilter" name="bot_outdated_filter" value="1"'.(!empty($settings['bot_outdated_filter']) ? ' checked' : '').'>';
+    $h .= '<label class="form-check-label" for="trBotOutdatedFilter">'.$addon_lang['label_bot_outdated_filter'].tr_hint_icon(sprintf($addon_lang['hint_bot_outdated_filter'], tr_estimated_chrome_major(), tr_chrome_min_major())).'</label>';
+    $h .= '</div>';
+    $h .= '<div class="small text-muted mb-3 ms-5">'
+        .sprintf($addon_lang['label_outdated_threshold'], tr_chrome_min_major()).$count_badge('old_chrome')
+        .'</div>';
     $h .= '<div class="mb-3">';
     $h .= '<label class="form-label">'.$addon_lang['label_bot_retention_days'].tr_hint_icon($addon_lang['hint_bot_retention_days']).'</label>';
     $h .= '<input type="number" min="0" class="form-control" name="bot_retention_days" value="'.(int) ($settings['bot_retention_days'] ?? 14).'" style="max-width:160px">';

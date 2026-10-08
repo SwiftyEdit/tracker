@@ -109,5 +109,11 @@
   "msg_pattern_exists": "Dieses Muster ist bereits vorhanden.",
   "msg_pattern_added": "Muster „%s“ hinzugefügt.",
   "msg_pattern_removed": "Muster „%s“ entfernt.",
-  "msg_pattern_covered": "Wird bereits vom Muster „%s“ erkannt - kein zusätzliches Muster nötig."
+  "msg_pattern_covered": "Wird bereits vom Muster „%s“ erkannt - kein zusätzliches Muster nötig.",
+  "hint_ua_outdated_chrome": "Veraltete Chrome-Version (%d, aktuell etwa %d). Chrome aktualisiert sich automatisch, echte Besucher senden so eine Version praktisch nie - typisch für Scraper mit fest eingetragenem User-Agent. Vorgeschlagen ist die exakte Versionsnummer, damit nur dieser eine User-Agent erfasst wird.",
+  "label_bot_outdated_filter": "Veraltete Chrome-Versionen als Bot werten",
+  "hint_bot_outdated_filter": "Chrome, Edge und Opera aktualisieren sich automatisch. Ein User-Agent mit einer rund drei Jahre alten Chrome-Version stammt praktisch immer von einem Scraper mit fest eingetragenem User-Agent. Aktuell ist etwa Version %d, als Bot gilt alles unter %d. Die Grenze wandert automatisch mit. Betroffen sind auch Rechner, die keine Updates mehr bekommen (Windows 7/8, sehr alte macOS-Versionen) - deren Anteil ist heute verschwindend gering.",
+  "label_outdated_threshold": "Als Bot gilt Chrome unter Version %d",
+  "label_reason_old_chrome": "Veraltetes Chrome",
+  "status_old_chrome": "Bot: veraltetes Chrome"
 }

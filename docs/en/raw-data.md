@@ -34,8 +34,9 @@ only one or a few pages, no language, no Sec-Fetch headers.
 3. If the user agent contains a distinctive name (e.g. `FooScraper/2.1`), create a pattern via
    **Mark as bot**. A suggestion is prefilled and can be shortened. Existing raw data and the
    affected days are corrected right away.
-4. If the user agent looks like a regular browser, a pattern won't help. Hits like that are
-   caught by the header filter (see *Settings*).
+4. If the user agent looks like a regular, current browser, a pattern won't help. Hits like that
+   are caught by the header filter (see *Settings*). Outdated Chrome versions are caught
+   automatically.
 
 ## Notes
 

@@ -35,8 +35,9 @@ IP-Adressen), oft nur eine oder wenige Seiten, keine Sprache, keine Sec-Fetch-He
 3. Enthält der User-Agent einen eindeutigen Namen (z. B. `FooScraper/2.1`), über **Als Bot
    markieren** ein Muster anlegen. Ein Vorschlag ist bereits eingetragen und kann gekürzt werden.
    Vorhandene Rohdaten und die betroffenen Tage werden sofort korrigiert.
-4. Sieht der User-Agent aus wie ein normaler Browser, hilft kein Muster. Solche Aufrufe erkennt
-   der Header-Filter (siehe *Einstellungen*).
+4. Sieht der User-Agent aus wie ein normaler, aktueller Browser, hilft kein Muster. Solche Aufrufe
+   erkennt der Header-Filter (siehe *Einstellungen*). Veraltete Chrome-Versionen werden automatisch
+   erkannt.
 
 ## Hinweise
 

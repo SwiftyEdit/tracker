@@ -70,6 +70,9 @@ function tr_get_default_settings(): array {
         // bots - catches scrapers that send a normal browser User-Agent
         // (often from rotating IPs, so every hit looks like a new visitor).
         'bot_header_filter' => 1,
+        // Chromium UAs ~3 years behind the current Chrome version count as
+        // bots - real Chrome auto-updates, scrapers often hardcode an old UA.
+        'bot_outdated_filter' => 1,
         // Bot hits are kept in raw_hits (so they can be inspected under
         // "Rohdaten"), but only this long - they never reach the stats.
         'bot_retention_days' => 14,
@@ -136,6 +139,9 @@ function tr_bot_rules(array $settings): array {
     return [
         'enabled' => !empty($settings['bot_filter_enabled']),
         'header_filter' => !empty($settings['bot_header_filter']),
+        'outdated_filter' => !empty($settings['bot_outdated_filter']),
+        // Computed once here, not per hit.
+        'chrome_min_major' => tr_chrome_min_major(),
         'patterns' => array_values(array_unique(array_merge(tr_default_bot_patterns(), tr_custom_bot_patterns($settings)))),
     ];
 }
@@ -164,6 +170,9 @@ function tr_bot_reason(string $ua, string $accept_language, ?int $has_sec_fetch,
         if (str_contains($ua_lc, $pattern)) {
             return 'ua:'.$pattern;
         }
+    }
+    if (!empty($rules['outdated_filter']) && tr_outdated_chrome_major($ua, $rules['chrome_min_major']) !== null) {
+        return 'old_chrome';
     }
     if ($rules['header_filter']) {
         if (trim($accept_language) === '') {
@@ -220,9 +229,44 @@ function tr_pattern_hits_browsers(string $pattern): bool {
 }
 
 /**
+ * Rough current Chrome major version, derived from the release cadence
+ * (Chrome 100 on 2022-03-29, roughly one major every ~4.3 weeks incl.
+ * holiday gaps) - no hardcoded "current" version that goes stale.
+ */
+function tr_estimated_chrome_major(): int {
+    return 100 + (int) floor((time() - strtotime('2022-03-29')) / (30.5 * 86400));
+}
+
+/**
+ * Oldest Chrome major version still counted as a real browser: ~3 years
+ * (36 majors) behind current. The margin covers browsers shipping an older
+ * Chromium (Samsung Internet) and devices stuck on their last supported
+ * Chrome (Android 7: 119, macOS 10.15: 128). Windows 7/8 (109) and macOS
+ * 10.13/10.14 (116) fall below it - a negligible share by now.
+ */
+function tr_chrome_min_major(): int {
+    return tr_estimated_chrome_major() - 35;
+}
+
+/**
+ * Chrome major version of a Chromium UA (Chrome, Edge, Opera, WebViews - all
+ * send "Chrome/NNN") if it is below tr_chrome_min_major(), i.e. so old that
+ * no auto-updating real browser still sends it - typical for scrapers with
+ * a hardcoded UA string. null if not Chromium or reasonably current.
+ */
+function tr_outdated_chrome_major(string $ua, ?int $min_major = null): ?int {
+    if (!preg_match('~Chrome/(\d+)\.~', $ua, $m)) {
+        return null;
+    }
+    $major = (int) $m[1];
+    return $major < ($min_major ?? tr_chrome_min_major()) ? $major : null;
+}
+
+/**
  * Best guess at a distinctive token for the "Als Bot markieren" form: the
  * first "Name/1.2" product token that isn't standard browser boilerplate,
- * else '' (a plain browser UA - nothing safe to suggest).
+ * else the exact Chrome version if it is long outdated, else '' (a plain,
+ * current browser UA - nothing safe to suggest).
  */
 function tr_suggest_bot_pattern(string $ua): string {
     $boring = ['mozilla', 'applewebkit', 'chrome', 'safari', 'version', 'gecko', 'firefox', 'mobile', 'edg', 'opr', 'crios', 'fxios', 'samsungbrowser', 'khtml', 'trident'];
@@ -233,6 +277,11 @@ function tr_suggest_bot_pattern(string $ua): string {
                 return $t;
             }
         }
+    }
+    // Exact full version (e.g. "chrome/101.0.4951.67"), not just the major -
+    // as narrow as possible, only this one hardcoded string matches.
+    if (tr_outdated_chrome_major($ua) !== null && preg_match('~Chrome/[\d.]+~', $ua, $m)) {
+        return strtolower($m[0]);
     }
     return '';
 }

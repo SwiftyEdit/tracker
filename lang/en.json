@@ -109,5 +109,11 @@
   "msg_pattern_exists": "This pattern already exists.",
   "msg_pattern_added": "Pattern \"%s\" added.",
   "msg_pattern_removed": "Pattern \"%s\" removed.",
-  "msg_pattern_covered": "Already caught by the pattern \"%s\" - no additional pattern needed."
+  "msg_pattern_covered": "Already caught by the pattern \"%s\" - no additional pattern needed.",
+  "hint_ua_outdated_chrome": "Outdated Chrome version (%d, currently about %d). Chrome updates itself automatically, so real visitors practically never send a version like this - typical for scrapers with a hardcoded user agent. The exact version number is suggested so only this one user agent is caught.",
+  "label_bot_outdated_filter": "Treat outdated Chrome versions as bots",
+  "hint_bot_outdated_filter": "Chrome, Edge and Opera update themselves automatically. A user agent with a Chrome version about three years old practically always comes from a scraper with a hardcoded user agent. The current version is about %d; everything below %d counts as a bot. The threshold moves along automatically. This also affects computers that no longer get updates (Windows 7/8, very old macOS versions) - a negligible share today.",
+  "label_outdated_threshold": "Chrome below version %d counts as a bot",
+  "label_reason_old_chrome": "Outdated Chrome",
+  "status_old_chrome": "Bot: outdated Chrome"
 }

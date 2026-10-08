@@ -21,7 +21,8 @@ See the plugin's own **Hilfe/Help** tab (Addons > Tracker) for the full walkthro
   and manually UTM-tagged campaigns from organic search/social/referral/direct traffic - a plain
   referrer can't tell these apart on its own, see the Help tab for why.
 - **Bot detection you can check**: built-in user-agent list plus custom patterns, and a header
-  filter (missing `Accept-Language` / `Sec-Fetch-*`) that catches scrapers posing as browsers.
+  filter (missing `Accept-Language` / `Sec-Fetch-*`) plus an outdated-Chrome rule (~3 years behind,
+  threshold moves with Chrome's release cadence) that catch scrapers posing as browsers.
   Bots are stored flagged, never counted, and visible in the "Raw data" tab - where a user agent
   can be marked as a bot directly. Rule changes re-evaluate existing raw data.
 - **Configurable**: raw-hit retention window, bot retention, optional GeoIP country lookup via an

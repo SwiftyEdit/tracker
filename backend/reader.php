@@ -279,7 +279,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     }
     $f_url = mb_substr(trim((string) ($_GET['url'] ?? '')), 0, 1000);
     $f_ua = mb_substr(trim((string) ($_GET['ua'] ?? '')), 0, 500);
-    $statuses = ['all', 'human', 'bot', 'no_lang', 'no_sec_fetch', 'no_ua', 'pattern'];
+    $statuses = ['all', 'human', 'bot', 'old_chrome', 'no_lang', 'no_sec_fetch', 'no_ua', 'pattern'];
     $status = in_array($_GET['status'] ?? '', $statuses, true) ? $_GET['status'] : 'all';
     $views = ['agents', 'pages', 'hits'];
     $view = in_array($_GET['view'] ?? '', $views, true) ? $_GET['view'] : 'agents';
@@ -302,7 +302,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     $where[] = match ($status) {
         'human' => 'bot_reason IS NULL',
         'bot' => 'bot_reason IS NOT NULL',
-        'no_lang', 'no_sec_fetch', 'no_ua' => "bot_reason = '".$status."'",
+        'old_chrome', 'no_lang', 'no_sec_fetch', 'no_ua' => "bot_reason = '".$status."'",
         'pattern' => "bot_reason LIKE 'ua:%'",
         default => '1=1',
     };
@@ -333,6 +333,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
             SUM(bot_reason = 'no_lang') AS no_lang,
             SUM(bot_reason = 'no_sec_fetch') AS no_sec_fetch,
             SUM(bot_reason = 'no_ua') AS no_ua,
+            SUM(bot_reason = 'old_chrome') AS old_chrome,
             SUM(bot_reason LIKE 'ua:%') AS pattern
         FROM raw_hits WHERE ".$where_sql,
         $params
@@ -351,6 +352,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     echo $stat($nf($sum['human']), $addon_lang['status_human'], 'human');
     echo $stat($nf($sum['bots']), $addon_lang['status_bot'], 'bot');
     echo $stat($nf($sum['pattern']), $addon_lang['status_pattern'], 'pattern');
+    echo $stat($nf($sum['old_chrome']), $addon_lang['label_reason_old_chrome'], 'old_chrome');
     echo $stat($nf($sum['no_lang']), $addon_lang['label_reason_no_lang'], 'no_lang');
     echo $stat($nf($sum['no_sec_fetch']), $addon_lang['label_reason_no_sec_fetch'], 'no_sec_fetch');
     echo '</div>';
@@ -412,8 +414,11 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
                 echo '<input type="hidden" name="add_bot_pattern" value="1">';
                 echo '<input type="hidden" name="context" value="rawdata">';
                 echo '<input type="hidden" name="csrf_token" value="'.htmlspecialchars($_SESSION['token'] ?? '', ENT_QUOTES).'">';
+                $outdated = tr_outdated_chrome_major($ua);
                 if ($suggestion === '') {
                     echo '<div class="small text-warning mb-1" style="white-space:normal">'.$addon_lang['hint_ua_looks_like_browser'].'</div>';
+                } elseif ($outdated !== null && str_starts_with($suggestion, 'chrome/')) {
+                    echo '<div class="small text-muted mb-1" style="white-space:normal">'.sprintf($addon_lang['hint_ua_outdated_chrome'], $outdated, tr_estimated_chrome_major()).'</div>';
                 } else {
                     echo '<div class="small text-muted mb-1" style="white-space:normal">'.$addon_lang['hint_mark_bot'].'</div>';
                 }

@@ -31,6 +31,12 @@ the **Raw data** tab.
   addresses too, so every hit looks like a new visitor (almost as many visitors as pageviews). A
   user-agent pattern can't catch such bots, this filter can. The Sec-Fetch check only applies to
   HTTPS requests.
+- **Treat outdated Chrome versions as bots** (on by default): Chrome, Edge and Opera update
+  themselves automatically. A user agent with a Chrome version about three years old (e.g.
+  `Chrome/101` in 2026) practically always comes from a scraper with a hardcoded user agent. The
+  threshold is derived from Chrome's release cadence and moves along automatically; the card shows
+  the current one. Computers without updates (Windows 7/8, very old macOS versions) are affected
+  too - a negligible share today.
 - **Custom patterns**: texts contained in the user agent (no regex, case-insensitive). Each
   pattern shows how many hits in the current raw data it caught. The easiest way to add one is
   "Mark as bot" in the **Raw data** tab.

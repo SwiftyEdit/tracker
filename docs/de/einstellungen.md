@@ -32,6 +32,12 @@ sich aber im Tab **Rohdaten** nachprüfen.
   wechseln oft auch ständig die IP-Adresse, deshalb sieht jeder Aufruf aus wie ein neuer Besucher
   (fast genauso viele Besucher wie Seitenaufrufe). Ein User-Agent-Muster kann solche Bots nicht
   erkennen, dieser Filter schon. Die Sec-Fetch-Prüfung greift nur bei HTTPS-Aufrufen.
+- **Veraltete Chrome-Versionen als Bot werten** (Voreinstellung an): Chrome, Edge und Opera
+  aktualisieren sich automatisch. Ein User-Agent mit einer rund drei Jahre alten Chrome-Version
+  (z. B. `Chrome/101` im Jahr 2026) stammt praktisch immer von einem Scraper mit fest eingetragenem
+  User-Agent. Die Grenze wird aus dem Release-Rhythmus von Chrome berechnet und wandert automatisch
+  mit, die Karte zeigt die aktuelle Grenze an. Betroffen sind auch Rechner ohne Updates (Windows 7/8,
+  sehr alte macOS-Versionen), deren Anteil ist heute verschwindend gering.
 - **Eigene Muster**: Texte, die im User-Agent vorkommen (kein Regex, Groß-/Kleinschreibung egal).
   Jedes Muster zeigt, wie viele Aufrufe in den aktuellen Rohdaten es erkannt hat. Am einfachsten
   fügt man sie im Tab **Rohdaten** über „Als Bot markieren“ hinzu.
