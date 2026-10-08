@@ -3,14 +3,20 @@
     "id": "tracker",
     "name": "Tracker",
     "type": "plugin",
-    "version": "1.0.0",
-    "build": 1,
+    "version": "1.1.0",
+    "build": 2,
     "author": "SwiftyEdit Developer Team",
     "description": "Self-hosted, privacy-friendly statistics: pageviews, referrers, browsers, devices and campaign sources - captured server-side with zero frontend footprint.",
     "database": "tracker.sqlite3",
     "update_url": "https://raw.githubusercontent.com/SwiftyEdit/tracker/main/info.json"
   },
   "versions": [
+    {
+      "version": "1.1.0",
+      "build": 2,
+      "requires_build": "26-0183",
+      "download_url": "https://github.com/SwiftyEdit/tracker/releases/download/v1.1.0/tracker-1.1.0.zip"
+    },
     {
       "version": "1.0.0",
       "build": 1,
@@ -22,6 +28,10 @@
     {
       "text": "nav_overview",
       "file": "start"
+    },
+    {
+      "text": "nav_rawdata",
+      "file": "rawdata"
     },
     {
       "text": "nav_settings",

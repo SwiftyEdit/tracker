@@ -11,7 +11,8 @@ priority: 60
 ## Was gespeichert wird
 
 Pro Seitenaufruf: Zeitpunkt, aufgerufene Adresse inkl. Parametern, Referrer, User-Agent,
-Browser-Sprache, ein Länderkürzel (nur bei aktiviertem GeoIP) und ein Besucher-Hash.
+Browser-Sprache, ob Sec-Fetch-Header gesendet wurden (ja/nein), ein Länderkürzel (nur bei aktiviertem
+GeoIP), ein Besucher-Hash und gegebenenfalls der Grund, warum der Aufruf als Bot gilt.
 
 **Nicht gespeichert wird die IP-Adresse**, auch nicht kurzzeitig in der Datenbank. Sie wird nur
 im Moment des Aufrufs für den Hash und die Länder-Erkennung verwendet.
@@ -33,7 +34,8 @@ Einzelfall ab. Das ersetzt keine Rechtsberatung.
 2. Dort wird (bei PHP-FPM mit `fastcgi_finish_request()`) die Verbindung zum Besucher beendet. Der
    Server schreibt den Aufruf erst danach in die Datenbank. Ohne FPM geschieht das Schreiben
    unmittelbar, ist aber nur ein einzelner Datenbankeintrag.
-3. Administratoren und als Bot erkannte Aufrufe werden verworfen.
+3. Aufrufe von Administratoren werden verworfen. Als Bot erkannte Aufrufe werden markiert gespeichert
+   (nur zur Kontrolle unter *Rohdaten*, nach der Bot-Aufbewahrungsdauer gelöscht) und nie mitgezählt.
 4. Beim Öffnen der Übersicht (höchstens alle fünf Minuten) werden neue Aufrufe zu Tagessummen
    verarbeitet: Browser, Betriebssystem, Gerätetyp, Quelle und Referrer werden bestimmt. Betroffene
    Tage werden dabei komplett neu berechnet, so bleiben die Besucherzahlen korrekt.

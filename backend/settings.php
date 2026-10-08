@@ -23,3 +23,9 @@ echo '<div class="card-body" hx-get="/admin-xhr/addons/plugin/tracker/read/?show
 echo '</div>';
 echo '</div>';
 echo '</div>';
+
+// Bot detection gets its own full-width card (1.1.0) - every form in it
+// re-renders #trBotCard itself, see backend/bot-ui.php.
+echo '<div class="card mb-3">';
+echo '<div class="card-body" id="trBotCard" hx-get="/admin-xhr/addons/plugin/tracker/read/?show=bot_card" hx-trigger="load">LOADING ...</div>';
+echo '</div>';

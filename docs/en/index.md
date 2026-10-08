@@ -35,6 +35,7 @@ Meta Ads, UTM parameters, ...).
 
 - **Reports**: how to read the overview page (time range, chart, cards)
 - **Sources & campaigns**: where visitors come from and how to make newsletters or social posts traceable
-- **Settings**: retention, bot filter, own domain
+- **Raw data**: inspect individual hits and spot bots
+- **Settings**: retention, bot detection, own domain
 - **GeoIP**: setting up country detection
 - **Privacy & technology**: what is stored, how capture works, known limitations

@@ -71,7 +71,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'overview') {
     $period_label = date('d.m.Y', strtotime($from)).' – '.date('d.m.Y', strtotime($to));
     echo '<p class="text-muted small mb-3">'.sprintf($addon_lang['label_period'], $period_label).'</p>';
 
-    $totals = $tracker_db->select('daily_totals', ['date', 'pageviews', 'visitors'], [
+    $totals = $tracker_db->select('daily_totals', ['date', 'pageviews', 'visitors', 'bots'], [
         'date[>=]' => $from,
         'date[<=]' => $to,
         'ORDER' => ['date' => 'DESC'],
@@ -79,6 +79,10 @@ if (isset($_GET['show']) && $_GET['show'] === 'overview') {
 
     $sum_pageviews = array_sum(array_column($totals, 'pageviews'));
     $sum_visitors = array_sum(array_column($totals, 'visitors'));
+    $sum_bots = array_sum(array_column($totals, 'bots'));
+    if ($sum_bots > 0) {
+        echo '<p class="text-muted small mb-3"><i class="bi bi-robot"></i> '.sprintf($addon_lang['label_bots_filtered'], number_format($sum_bots, 0, ',', '.')).'</p>';
+    }
 
     echo '<div class="row mb-3">';
     echo '<div class="col-md-4"><div class="card text-center p-3"><div class="fs-2">'.number_format($sum_pageviews, 0, ',', '.').'</div><div class="text-muted">'.$addon_lang['label_pageviews'].'</div></div></div>';
@@ -231,17 +235,6 @@ if (isset($_GET['show']) && $_GET['show'] === 'settings_form') {
     echo '<hr>';
 
     echo '<div class="form-check form-switch mb-2">';
-    echo '<input class="form-check-input" type="checkbox" role="switch" id="trBotFilterEnabled" name="bot_filter_enabled" value="1"'.(!empty($settings['bot_filter_enabled']) ? ' checked' : '').'>';
-    echo '<label class="form-check-label" for="trBotFilterEnabled">'.$addon_lang['label_bot_filter_enabled'].'</label>';
-    echo '</div>';
-    echo '<div class="mb-3">';
-    echo '<label class="form-label">'.$addon_lang['label_bot_filter_patterns'].tr_hint_icon($addon_lang['hint_bot_filter_patterns']).'</label>';
-    echo '<textarea class="form-control" name="bot_filter_patterns" rows="3">'.htmlspecialchars((string) ($settings['bot_filter_patterns'] ?? '')).'</textarea>';
-    echo '</div>';
-
-    echo '<hr>';
-
-    echo '<div class="form-check form-switch mb-2">';
     echo '<input class="form-check-input" type="checkbox" role="switch" id="trGeoipEnabled" name="geoip_enabled" value="1"'.(!empty($settings['geoip_enabled']) ? ' checked' : '').'>';
     echo '<label class="form-check-label" for="trGeoipEnabled">'.$addon_lang['label_geoip_enabled'].'</label>';
     echo '</div>';
@@ -264,6 +257,249 @@ if (isset($_GET['show']) && $_GET['show'] === 'settings_form') {
     echo '<button type="submit" class="btn btn-primary">'.$addon_lang['btn_save'].'</button>';
     echo '</form>';
 
+    exit;
+}
+
+/* ---------------------------------------------------------------
+ * Rohdaten tab (1.1.0) - the one place that reads raw_hits directly, so
+ * the admin can see what's behind a suspicious number (e.g. as many
+ * "visitors" as pageviews) and turn it into a bot rule instead of guessing.
+ * Three views over the same filter: grouped by User-Agent, grouped by page,
+ * and the individual hits. Everything re-renders #trRawContent.
+ * -------------------------------------------------------------- */
+if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
+
+    $today = date('Y-m-d');
+    $is_valid_date = fn($s) => is_string($s) && \DateTime::createFromFormat('Y-m-d', $s) !== false && \DateTime::createFromFormat('Y-m-d', $s)->format('Y-m-d') === $s;
+
+    $from = $is_valid_date($_GET['from'] ?? null) ? $_GET['from'] : date('Y-m-d', strtotime('-6 days'));
+    $to = $is_valid_date($_GET['to'] ?? null) ? min($_GET['to'], $today) : $today;
+    if ($from > $to) {
+        $from = $to;
+    }
+    $f_url = mb_substr(trim((string) ($_GET['url'] ?? '')), 0, 1000);
+    $f_ua = mb_substr(trim((string) ($_GET['ua'] ?? '')), 0, 500);
+    $statuses = ['all', 'human', 'bot', 'no_lang', 'no_sec_fetch', 'no_ua', 'pattern'];
+    $status = in_array($_GET['status'] ?? '', $statuses, true) ? $_GET['status'] : 'all';
+    $views = ['agents', 'pages', 'hits'];
+    $view = in_array($_GET['view'] ?? '', $views, true) ? $_GET['view'] : 'agents';
+
+    $state = ['show' => 'raw_data', 'view' => $view, 'from' => $from, 'to' => $to, 'url' => $f_url, 'ua' => $f_ua, 'status' => $status];
+    $read_url = fn(array $override = []) => '/admin-xhr/addons/plugin/tracker/read/?'.http_build_query(array_merge($state, $override));
+    $hx = fn(array $override) => 'hx-get="'.htmlspecialchars($read_url($override), ENT_QUOTES).'" hx-target="#trRawContent" hx-swap="innerHTML"';
+
+    // ts is stored as UTC (SQLite CURRENT_TIMESTAMP), compared as text.
+    $where = ['ts >= :from', 'ts < :to_excl'];
+    $params = [':from' => $from, ':to_excl' => date('Y-m-d', strtotime($to.' +1 day'))];
+    if ($f_url !== '') {
+        $where[] = "url LIKE :url ESCAPE '\\'";
+        $params[':url'] = tr_like_contains($f_url);
+    }
+    if ($f_ua !== '') {
+        $where[] = "user_agent LIKE :ua ESCAPE '\\'";
+        $params[':ua'] = tr_like_contains($f_ua);
+    }
+    $where[] = match ($status) {
+        'human' => 'bot_reason IS NULL',
+        'bot' => 'bot_reason IS NOT NULL',
+        'no_lang', 'no_sec_fetch', 'no_ua' => "bot_reason = '".$status."'",
+        'pattern' => "bot_reason LIKE 'ua:%'",
+        default => '1=1',
+    };
+    $where_sql = implode(' AND ', $where);
+
+    /* Filter form */
+    echo '<form class="row g-2 align-items-end mb-3" hx-get="/admin-xhr/addons/plugin/tracker/read/" hx-target="#trRawContent" hx-swap="innerHTML">';
+    echo '<input type="hidden" name="show" value="raw_data">';
+    echo '<input type="hidden" name="view" value="'.$view.'">';
+    echo '<div class="col-auto"><label class="form-label small mb-0">'.$addon_lang['label_from'].'</label><input type="date" class="form-control form-control-sm" name="from" value="'.$from.'" max="'.$today.'"></div>';
+    echo '<div class="col-auto"><label class="form-label small mb-0">'.$addon_lang['label_range_to'].'</label><input type="date" class="form-control form-control-sm" name="to" value="'.$to.'" max="'.$today.'"></div>';
+    echo '<div class="col"><label class="form-label small mb-0">'.$addon_lang['th_url'].'</label><input type="text" class="form-control form-control-sm" name="url" value="'.htmlspecialchars($f_url, ENT_QUOTES).'" placeholder="'.htmlspecialchars($addon_lang['placeholder_contains'], ENT_QUOTES).'"></div>';
+    echo '<div class="col"><label class="form-label small mb-0">'.$addon_lang['th_user_agent'].'</label><input type="text" class="form-control form-control-sm" name="ua" value="'.htmlspecialchars($f_ua, ENT_QUOTES).'" placeholder="'.htmlspecialchars($addon_lang['placeholder_contains'], ENT_QUOTES).'"></div>';
+    echo '<div class="col-auto"><label class="form-label small mb-0">'.$addon_lang['th_status'].'</label><select class="form-select form-select-sm" name="status">';
+    foreach ($statuses as $s) {
+        echo '<option value="'.$s.'"'.($s === $status ? ' selected' : '').'>'.$addon_lang['status_'.$s].'</option>';
+    }
+    echo '</select></div>';
+    echo '<div class="col-auto"><button type="submit" class="btn btn-sm btn-primary">'.$addon_lang['btn_apply'].'</button> ';
+    echo '<button type="button" class="btn btn-sm btn-outline-secondary" hx-get="/admin-xhr/addons/plugin/tracker/read/?show=raw_data" hx-target="#trRawContent" hx-swap="innerHTML">'.$addon_lang['btn_reset'].'</button></div>';
+    echo '</form>';
+
+    /* Summary */
+    $sum = $tracker_db->query(
+        "SELECT COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors,
+            SUM(bot_reason IS NULL) AS human,
+            SUM(bot_reason IS NOT NULL) AS bots,
+            SUM(bot_reason = 'no_lang') AS no_lang,
+            SUM(bot_reason = 'no_sec_fetch') AS no_sec_fetch,
+            SUM(bot_reason = 'no_ua') AS no_ua,
+            SUM(bot_reason LIKE 'ua:%') AS pattern
+        FROM raw_hits WHERE ".$where_sql,
+        $params
+    )->fetch(\PDO::FETCH_ASSOC);
+    $nf = fn($n) => number_format((int) $n, 0, ',', '.');
+
+    $earliest = $tracker_db->query('SELECT MIN(ts) FROM raw_hits')->fetchColumn();
+    echo '<p class="small text-muted mb-2">'.sprintf($addon_lang['label_raw_available'], $earliest ? date('d.m.Y', strtotime($earliest)) : '-').'</p>';
+
+    $stat = fn($value, $label, $status_link = null) => '<div class="col-6 col-md"><div class="card text-center p-2 h-100">'
+        .'<div class="fs-4">'.($status_link ? '<a href="#" onclick="return false;" '.$hx(['status' => $status_link]).'>'.$value.'</a>' : $value).'</div>'
+        .'<div class="small text-muted">'.$label.'</div></div></div>';
+    echo '<div class="row g-2 mb-3">';
+    echo $stat($nf($sum['hits']), $addon_lang['label_raw_hits']);
+    echo $stat($nf($sum['visitors']), $addon_lang['label_visitor_hashes']);
+    echo $stat($nf($sum['human']), $addon_lang['status_human'], 'human');
+    echo $stat($nf($sum['bots']), $addon_lang['status_bot'], 'bot');
+    echo $stat($nf($sum['pattern']), $addon_lang['status_pattern'], 'pattern');
+    echo $stat($nf($sum['no_lang']), $addon_lang['label_reason_no_lang'], 'no_lang');
+    echo $stat($nf($sum['no_sec_fetch']), $addon_lang['label_reason_no_sec_fetch'], 'no_sec_fetch');
+    echo '</div>';
+
+    /* View switch */
+    echo '<div class="btn-group mb-2" role="group">';
+    foreach ($views as $v) {
+        echo '<button type="button" class="btn btn-sm btn-outline-primary'.($v === $view ? ' active' : '').'" '.$hx(['view' => $v]).'>'.$addon_lang['view_'.$v].'</button>';
+    }
+    echo '</div>';
+
+    $status_badge = function (?string $reason) use ($addon_lang): string {
+        if ($reason === null || $reason === '') {
+            return '<span class="badge text-bg-success">'.$addon_lang['status_human'].'</span>';
+        }
+        return '<span class="badge text-bg-danger">'.htmlspecialchars(tr_bot_reason_label($reason, $addon_lang)).'</span>';
+    };
+    $thead = fn(array $cols) => '<thead style="position:sticky;top:0;z-index:1;background-color:var(--bs-card-bg);"><tr><th>'.implode('</th><th>', $cols).'</th></tr></thead>';
+
+    echo '<div class="card p-0">';
+    echo '<div class="table-responsive" style="max-height:600px;overflow-y:auto;">';
+
+    if ($view === 'agents') {
+        $rows = $tracker_db->query(
+            "SELECT user_agent, COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors, COUNT(DISTINCT url) AS pages,
+                SUM(accept_language IS NULL OR accept_language = '') AS no_lang,
+                SUM(has_sec_fetch = 0) AS no_sec_fetch,
+                SUM(bot_reason IS NOT NULL) AS bots, MIN(bot_reason) AS reason
+            FROM raw_hits WHERE ".$where_sql." GROUP BY user_agent ORDER BY hits DESC LIMIT 100",
+            $params
+        )->fetchAll(\PDO::FETCH_ASSOC);
+
+        echo '<table class="table table-sm mb-0 align-middle">';
+        echo $thead([$addon_lang['th_user_agent'], $addon_lang['label_raw_hits'], $addon_lang['label_visitor_hashes'], $addon_lang['th_pages'], $addon_lang['th_no_lang'], $addon_lang['th_no_sec_fetch'], $addon_lang['th_status'], '']);
+        echo '<tbody>';
+        foreach ($rows as $i => $r) {
+            $ua = (string) $r['user_agent'];
+            $hits = (int) $r['hits'];
+            $bots = (int) $r['bots'];
+            echo '<tr>';
+            echo '<td style="max-width:420px;word-break:break-all;" class="small">'
+                .'<a href="#" onclick="return false;" title="'.htmlspecialchars($addon_lang['hint_show_hits'], ENT_QUOTES).'" '.$hx(['view' => 'hits', 'ua' => $ua]).'>'
+                .($ua !== '' ? htmlspecialchars($ua) : '<em>'.$addon_lang['label_reason_no_ua'].'</em>').'</a></td>';
+            echo '<td>'.$nf($hits).'</td><td>'.$nf($r['visitors']).'</td><td>'.$nf($r['pages']).'</td>';
+            echo '<td>'.$nf($r['no_lang']).'</td><td>'.$nf($r['no_sec_fetch']).'</td>';
+            if ($bots === 0) {
+                echo '<td>'.$status_badge(null).'</td>';
+            } elseif ($bots === $hits) {
+                echo '<td>'.$status_badge($r['reason']).'</td>';
+            } else {
+                echo '<td><span class="badge text-bg-warning">'.sprintf($addon_lang['label_partly_bot'], $nf($bots)).'</span></td>';
+            }
+
+            echo '<td class="text-nowrap">';
+            if ($ua !== '' && $bots < $hits) {
+                $suggestion = tr_suggest_bot_pattern($ua);
+                echo '<details><summary class="btn btn-sm btn-outline-danger">'.$addon_lang['btn_mark_bot'].'</summary>';
+                echo '<form class="mt-2" style="min-width:260px" hx-post="/admin-xhr/addons/plugin/tracker/write/" hx-target="#trMarkResponse'.$i.'" hx-swap="innerHTML">';
+                echo '<input type="hidden" name="add_bot_pattern" value="1">';
+                echo '<input type="hidden" name="context" value="rawdata">';
+                echo '<input type="hidden" name="csrf_token" value="'.htmlspecialchars($_SESSION['token'] ?? '', ENT_QUOTES).'">';
+                if ($suggestion === '') {
+                    echo '<div class="small text-warning mb-1" style="white-space:normal">'.$addon_lang['hint_ua_looks_like_browser'].'</div>';
+                } else {
+                    echo '<div class="small text-muted mb-1" style="white-space:normal">'.$addon_lang['hint_mark_bot'].'</div>';
+                }
+                echo '<div class="input-group input-group-sm">';
+                echo '<input type="text" class="form-control" name="pattern" maxlength="100" required value="'.htmlspecialchars($suggestion, ENT_QUOTES).'">';
+                echo '<button type="submit" class="btn btn-danger">'.$addon_lang['btn_add'].'</button>';
+                echo '</div>';
+                echo '</form>';
+                echo '<div id="trMarkResponse'.$i.'" class="small mt-1" style="white-space:normal;max-width:300px"></div>';
+                echo '</details>';
+            }
+            echo '</td>';
+            echo '</tr>';
+        }
+        if (!$rows) {
+            echo '<tr><td colspan="8" class="text-muted">'.$addon_lang['msg_no_data'].'</td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    if ($view === 'pages') {
+        $rows = $tracker_db->query(
+            "SELECT url, COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors, COUNT(DISTINCT user_agent) AS agents,
+                SUM(bot_reason IS NOT NULL) AS bots
+            FROM raw_hits WHERE ".$where_sql." GROUP BY url ORDER BY hits DESC LIMIT 100",
+            $params
+        )->fetchAll(\PDO::FETCH_ASSOC);
+
+        echo '<table class="table table-sm mb-0 align-middle">';
+        echo $thead([$addon_lang['th_url'], $addon_lang['label_raw_hits'], $addon_lang['label_visitor_hashes'], $addon_lang['th_agents'], $addon_lang['status_bot']]);
+        echo '<tbody>';
+        foreach ($rows as $r) {
+            echo '<tr>';
+            echo '<td style="word-break:break-all;"><a href="#" onclick="return false;" title="'.htmlspecialchars($addon_lang['hint_show_agents'], ENT_QUOTES).'" '.$hx(['view' => 'agents', 'url' => $r['url']]).'>'.htmlspecialchars($r['url']).'</a></td>';
+            echo '<td>'.$nf($r['hits']).'</td><td>'.$nf($r['visitors']).'</td><td>'.$nf($r['agents']).'</td><td>'.$nf($r['bots']).'</td>';
+            echo '</tr>';
+        }
+        if (!$rows) {
+            echo '<tr><td colspan="5" class="text-muted">'.$addon_lang['msg_no_data'].'</td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    if ($view === 'hits') {
+        $rows = $tracker_db->query(
+            'SELECT ts, url, query_string, referrer, user_agent, accept_language, has_sec_fetch, country_code, bot_reason
+            FROM raw_hits WHERE '.$where_sql.' ORDER BY id DESC LIMIT 200',
+            $params
+        )->fetchAll(\PDO::FETCH_ASSOC);
+
+        echo '<table class="table table-sm mb-0 small">';
+        echo $thead([$addon_lang['th_time_utc'], $addon_lang['th_url'], $addon_lang['title_referrers'], $addon_lang['th_user_agent'], $addon_lang['th_language'], 'Sec-Fetch', $addon_lang['th_country'], $addon_lang['th_status']]);
+        echo '<tbody>';
+        foreach ($rows as $r) {
+            $page = (string) $r['url'].((string) $r['query_string'] !== '' ? '?'.$r['query_string'] : '');
+            $sec_fetch = $r['has_sec_fetch'] === null ? '<span class="text-muted">–</span>' : ((int) $r['has_sec_fetch'] === 1 ? '<i class="bi bi-check-lg text-success"></i>' : '<i class="bi bi-x-lg text-danger"></i>');
+            echo '<tr>';
+            echo '<td class="text-nowrap">'.htmlspecialchars((string) $r['ts']).'</td>';
+            echo '<td style="max-width:260px;word-break:break-all;">'.htmlspecialchars($page).'</td>';
+            echo '<td style="max-width:200px;word-break:break-all;">'.htmlspecialchars((string) $r['referrer']).'</td>';
+            echo '<td style="max-width:320px;word-break:break-all;">'.htmlspecialchars((string) $r['user_agent']).'</td>';
+            echo '<td>'.((string) $r['accept_language'] !== '' ? htmlspecialchars(mb_substr((string) $r['accept_language'], 0, 20)) : '<span class="text-danger">–</span>').'</td>';
+            echo '<td class="text-center">'.$sec_fetch.'</td>';
+            echo '<td>'.htmlspecialchars((string) $r['country_code']).'</td>';
+            echo '<td>'.$status_badge($r['bot_reason']).'</td>';
+            echo '</tr>';
+        }
+        if (!$rows) {
+            echo '<tr><td colspan="8" class="text-muted">'.$addon_lang['msg_no_data'].'</td></tr>';
+        }
+        echo '</tbody></table>';
+    }
+
+    echo '</div>';
+    echo '</div>';
+    echo '<p class="small text-muted mt-2">'.$addon_lang['hint_rawdata_limits'].'</p>';
+
+    exit;
+}
+
+/* ---------------------------------------------------------------
+ * Bot detection card (Einstellungen tab, 1.1.0) - see backend/bot-ui.php.
+ * -------------------------------------------------------------- */
+if (isset($_GET['show']) && $_GET['show'] === 'bot_card') {
+    require_once __DIR__.'/bot-ui.php';
+    echo tr_render_bot_card();
     exit;
 }
 

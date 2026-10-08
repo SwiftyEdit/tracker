@@ -63,7 +63,16 @@ function tr_get_default_settings(): array {
         // deletes them (0 = keep forever) - see backend/settings.php.
         'retention_days' => 90,
         'bot_filter_enabled' => 1,
-        'bot_filter_patterns' => tr_default_bot_patterns(),
+        // Admin-added User-Agent substrings (JSON list, lowercase), on top
+        // of the built-in tr_default_bot_patterns() - see backend/bot-ui.php.
+        'bot_custom_patterns' => '[]',
+        // Requests without Accept-Language / Sec-Fetch-* headers count as
+        // bots - catches scrapers that send a normal browser User-Agent
+        // (often from rotating IPs, so every hit looks like a new visitor).
+        'bot_header_filter' => 1,
+        // Bot hits are kept in raw_hits (so they can be inspected under
+        // "Rohdaten"), but only this long - they never reach the stats.
+        'bot_retention_days' => 14,
         // Off by default - no GeoIP data is bundled until an admin uploads
         // an IP-range CSV (see backend/settings.php).
         'geoip_enabled' => 0,
@@ -77,15 +86,155 @@ function tr_get_default_settings(): array {
     ];
 }
 
-function tr_default_bot_patterns(): string {
-    return implode('|', [
-        'bot', 'crawl', 'spider', 'slurp', 'mediapartners',
+/**
+ * Built-in User-Agent substrings (lowercase, plain text - no regex). Lives
+ * in code rather than in the settings table so plugin updates can extend
+ * it; admins add their own via bot_custom_patterns.
+ */
+function tr_default_bot_patterns(): array {
+    return [
+        // generic
+        'bot', 'crawl', 'spider', 'slurp', 'scrape', 'fetcher', 'preview',
+        'headless', 'phantomjs', 'puppeteer', 'playwright', 'selenium',
+        // search engines / SEO tools
+        'mediapartners', 'bingpreview', 'yandex', 'baiduspider', 'sogou',
+        'seznam', 'exabot', 'ia_archiver', 'ahrefs', 'semrush', 'mj12',
+        'dotbot', 'petalbot', 'serpstat', 'dataforseo', 'screaming frog',
+        'lighthouse', 'gtmetrix', 'pingdom', 'uptimerobot', 'statuscake',
+        // AI crawlers
+        'gptbot', 'chatgpt-user', 'oai-searchbot', 'claudebot', 'claude-web',
+        'anthropic-ai', 'perplexity', 'bytespider', 'ccbot', 'amazonbot',
+        'applebot', 'google-extended', 'meta-externalagent', 'diffbot',
+        'imagesift', 'timpibot', 'cohere-ai', 'youbot',
+        // link previews
         'facebookexternalhit', 'whatsapp', 'telegrambot', 'discordbot',
-        'preview', 'headless', 'curl', 'wget', 'python-requests',
-        'go-http-client', 'okhttp', 'axios', 'scrapy', 'ahrefsbot',
-        'semrushbot', 'mj12bot', 'dotbot', 'petalbot', 'bingpreview',
-        'uptimerobot', 'pingdom', 'gtmetrix',
-    ]);
+        'slackbot', 'skypeuripreview', 'embedly',
+        // HTTP libraries / CLI tools
+        'curl', 'wget', 'python-requests', 'python-urllib', 'aiohttp',
+        'httpx', 'go-http-client', 'okhttp', 'axios', 'node-fetch', 'undici',
+        'guzzlehttp', 'libwww-perl', 'apache-httpclient', 'java/', 'scrapy',
+        'postmanruntime', 'insomnia',
+    ];
+}
+
+/**
+ * @return string[] admin-added patterns, lowercase, deduplicated
+ */
+function tr_custom_bot_patterns(array $settings): array {
+    $list = json_decode((string) ($settings['bot_custom_patterns'] ?? '[]'), true);
+    if (!is_array($list)) {
+        return [];
+    }
+    return array_values(array_unique(array_filter(array_map(fn($p) => strtolower(trim((string) $p)), $list), fn($p) => $p !== '')));
+}
+
+/**
+ * Snapshot of the current bot rules, built once per request/run and passed
+ * to tr_bot_reason() for every hit.
+ */
+function tr_bot_rules(array $settings): array {
+    return [
+        'enabled' => !empty($settings['bot_filter_enabled']),
+        'header_filter' => !empty($settings['bot_header_filter']),
+        'patterns' => array_values(array_unique(array_merge(tr_default_bot_patterns(), tr_custom_bot_patterns($settings)))),
+    ];
+}
+
+/**
+ * Why a hit counts as a bot, or null for a (presumed) human visitor. The
+ * reason is stored in raw_hits.bot_reason, so the "Rohdaten" tab can show
+ * which rule caught what - and tr_reclassify_raw_hits() can re-run it after
+ * the rules change.
+ *
+ * @param int|null $has_sec_fetch 1/0 = Sec-Fetch-* headers present/missing on
+ *                                an HTTPS request, null = can't tell (plain
+ *                                HTTP - browsers only send them over HTTPS -
+ *                                or a hit recorded before 1.1.0)
+ */
+function tr_bot_reason(string $ua, string $accept_language, ?int $has_sec_fetch, array $rules): ?string {
+    if (!$rules['enabled']) {
+        return null;
+    }
+    if (trim($ua) === '') {
+        // Real browsers always send a User-Agent.
+        return 'no_ua';
+    }
+    $ua_lc = strtolower($ua);
+    foreach ($rules['patterns'] as $pattern) {
+        if (str_contains($ua_lc, $pattern)) {
+            return 'ua:'.$pattern;
+        }
+    }
+    if ($rules['header_filter']) {
+        if (trim($accept_language) === '') {
+            return 'no_lang';
+        }
+        if ($has_sec_fetch === 0) {
+            return 'no_sec_fetch';
+        }
+    }
+    return null;
+}
+
+/**
+ * 1/0 whether the current request carries Sec-Fetch-* headers, or null if
+ * that can't be judged: browsers only send them to secure origins, so on a
+ * plain-HTTP request their absence means nothing. Errs on the lenient side
+ * behind a TLS-terminating proxy that doesn't set X-Forwarded-Proto.
+ */
+function tr_request_sec_fetch_flag(): ?int {
+    $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
+        || (int) ($_SERVER['SERVER_PORT'] ?? 0) === 443;
+    if (!$https) {
+        return null;
+    }
+    return (isset($_SERVER['HTTP_SEC_FETCH_MODE']) || isset($_SERVER['HTTP_SEC_FETCH_DEST'])) ? 1 : 0;
+}
+
+/**
+ * User-Agents of real, current browsers - a custom pattern matching any of
+ * these would silently drop real visitors, so backend/writer.php rejects it.
+ */
+function tr_reference_browser_uas(): array {
+    return [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 Edg/129.0.0.0',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/129.0.6668.69 Mobile/15E148 Safari/604.1',
+        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36 OPR/114.0.0.0',
+    ];
+}
+
+function tr_pattern_hits_browsers(string $pattern): bool {
+    foreach (tr_reference_browser_uas() as $ua) {
+        if (str_contains(strtolower($ua), $pattern)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Best guess at a distinctive token for the "Als Bot markieren" form: the
+ * first "Name/1.2" product token that isn't standard browser boilerplate,
+ * else '' (a plain browser UA - nothing safe to suggest).
+ */
+function tr_suggest_bot_pattern(string $ua): string {
+    $boring = ['mozilla', 'applewebkit', 'chrome', 'safari', 'version', 'gecko', 'firefox', 'mobile', 'edg', 'opr', 'crios', 'fxios', 'samsungbrowser', 'khtml', 'trident'];
+    if (preg_match_all('~([A-Za-z][\w.\-]*)/[\w.]+~', $ua, $m)) {
+        foreach ($m[1] as $token) {
+            $t = strtolower($token);
+            if (!in_array($t, $boring, true) && strlen($t) >= 3 && !tr_pattern_hits_browsers($t)) {
+                return $t;
+            }
+        }
+    }
+    return '';
 }
 
 /**
@@ -176,10 +325,14 @@ function tr_capture_hit(array $context = []): void {
 
     $settings = tr_get_settings();
     $ua = (string) ($_SERVER['HTTP_USER_AGENT'] ?? '');
+    $accept_language = (string) ($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '');
+    $has_sec_fetch = tr_request_sec_fetch_flag();
 
-    if (!empty($settings['bot_filter_enabled']) && tr_is_bot($ua, (string) ($settings['bot_filter_patterns'] ?? ''))) {
-        return;
-    }
+    // Bots are stored too (flagged, never aggregated) instead of being
+    // dropped here - otherwise the admin can't see what got filtered, and
+    // can't re-evaluate older hits after changing the rules. They're purged
+    // after bot_retention_days, see tr_purge_old_raw_hits().
+    $bot_reason = tr_bot_reason($ua, $accept_language, $has_sec_fetch, tr_bot_rules($settings));
 
     $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
     $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
@@ -198,15 +351,32 @@ function tr_capture_hit(array $context = []): void {
         $country_code = tr_geoip_lookup($ip);
     }
 
-    $tracker_db->insert('raw_hits', [
+    $row = [
         'url' => mb_substr($url, 0, 1000),
         'query_string' => mb_substr($query_string, 0, 1000),
         'referrer' => mb_substr((string) ($_SERVER['HTTP_REFERER'] ?? ''), 0, 1000),
         'user_agent' => mb_substr($ua, 0, 500),
-        'accept_language' => mb_substr((string) ($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? ''), 0, 100),
+        'accept_language' => mb_substr($accept_language, 0, 100),
+        'has_sec_fetch' => $has_sec_fetch,
+        'bot_reason' => $bot_reason,
         'country_code' => $country_code,
         'visitor_hash' => tr_visitor_hash($ip, $ua, (string) ($settings['salt'] ?? '')),
-    ]);
+    ];
+
+    try {
+        $tracker_db->insert('raw_hits', $row);
+    } catch (\PDOException $e) {
+        // Plugin files were updated but install/updater.php hasn't run yet
+        // (it only runs on the next backend visit) - add the missing
+        // columns here so frontend hits aren't lost in the meantime.
+        // tr_updateOrCreateTable() echoes progress, which must not leak
+        // into the page when there's no FPM to have closed it already.
+        ob_start();
+        require_once __DIR__.'/../install/schema.php';
+        tr_updateOrCreateTable('raw_hits', TrackerSchema::getTableColumns('raw_hits'));
+        ob_end_clean();
+        $tracker_db->insert('raw_hits', $row);
+    }
 }
 
 /**
@@ -284,21 +454,6 @@ function tr_ipv4_to_int(string $ip): ?int {
     return unpack('N', $packed)[1];
 }
 
-function tr_is_bot(string $ua, string $patterns): bool {
-    if (trim($ua) === '') {
-        // No User-Agent at all is itself a strong bot/script signal - real
-        // browsers always send one.
-        return true;
-    }
-    if (trim($patterns) === '') {
-        return false;
-    }
-    // Admin-editable (backend/settings.php) - a malformed pattern shouldn't
-    // ever be able to break capture for every visitor, so a bad regex is
-    // treated as "no match" rather than fatal.
-    return (bool) @preg_match('/'.$patterns.'/i', $ua);
-}
-
 /* -------------------------------------------------------------------
  * Aggregation - lazy, throttled, never runs on a visitor's own request.
  * ---------------------------------------------------------------- */
@@ -363,8 +518,98 @@ function tr_aggregate_pending(): void {
         tr_save_setting('agg_watermark_id', $max_id);
     }
 
-    tr_purge_old_raw_hits((int) ($settings['retention_days'] ?? 90));
+    tr_purge_old_raw_hits((int) ($settings['retention_days'] ?? 90), (int) ($settings['bot_retention_days'] ?? 14));
     tr_save_setting('last_aggregated_at', time());
+}
+
+/**
+ * Re-applies the current bot rules to raw_hits rows already stored (all of
+ * them, or only those matching $extra_sql), updates bot_reason where it
+ * changed and recomputes the affected days - so editing the bot list also
+ * corrects past stats, as far back as raw_hits still reaches.
+ *
+ * @return array{checked:int, changed:int, days:int}
+ */
+function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []): array {
+    global $tracker_db;
+
+    $settings = tr_get_settings();
+    $rules = tr_bot_rules($settings);
+    $checked = 0;
+    $changed = 0;
+    $dates = [];
+    $last_id = 0;
+
+    $sql = 'SELECT id, ts, user_agent, accept_language, has_sec_fetch, bot_reason FROM raw_hits WHERE id > :last_id'
+        .($extra_sql !== '' ? ' AND ('.$extra_sql.')' : '')
+        .' ORDER BY id ASC LIMIT 5000';
+
+    // Chunked by id so memory stays flat however large raw_hits has grown;
+    // one transaction around all updates keeps SQLite from syncing to disk
+    // after every single statement.
+    $tracker_db->action(function ($db) use ($sql, $extra_params, $rules, &$checked, &$changed, &$dates, &$last_id) {
+        while (true) {
+            $rows = $db->query($sql, [':last_id' => $last_id] + $extra_params)->fetchAll(\PDO::FETCH_ASSOC);
+            if (!$rows) {
+                break;
+            }
+            $updates = []; // new reason ('' = human) => [ids]
+            foreach ($rows as $r) {
+                $last_id = (int) $r['id'];
+                $checked++;
+                $sec_fetch = $r['has_sec_fetch'] === null ? null : (int) $r['has_sec_fetch'];
+                $new = tr_bot_reason((string) $r['user_agent'], (string) $r['accept_language'], $sec_fetch, $rules);
+                $old = ($r['bot_reason'] ?? '') !== '' ? $r['bot_reason'] : null;
+                if ($new !== $old) {
+                    $updates[$new ?? ''][] = $last_id;
+                    $dates[substr((string) $r['ts'], 0, 10)] = true;
+                    $changed++;
+                }
+            }
+            foreach ($updates as $reason => $ids) {
+                foreach (array_chunk($ids, 500) as $chunk) {
+                    $db->update('raw_hits', ['bot_reason' => $reason === '' ? null : $reason], ['id' => $chunk]);
+                }
+            }
+        }
+    });
+
+    // The oldest day may already be partly purged by retention_days -
+    // recomputing it from what's left would undercount it, so it (and
+    // anything older) keeps its existing totals.
+    $retention_days = (int) ($settings['retention_days'] ?? 90);
+    $oldest_complete = $retention_days > 0 ? date('Y-m-d', strtotime('-'.($retention_days - 1).' days')) : '';
+
+    $recomputed = 0;
+    foreach (array_keys($dates) as $date) {
+        if ($date >= $oldest_complete) {
+            tr_recompute_day($date);
+            $recomputed++;
+        }
+    }
+
+    return ['checked' => $checked, 'changed' => $changed, 'days' => $recomputed];
+}
+
+/**
+ * LIKE operand for a plain-text "contains" match (SQLite's LIKE is already
+ * case-insensitive for ASCII). Use with ESCAPE '\'.
+ */
+function tr_like_contains(string $needle): string {
+    return '%'.addcslashes($needle, '%_\\').'%';
+}
+
+/**
+ * Labels for raw_hits.bot_reason values, for the backend UI.
+ */
+function tr_bot_reason_label(?string $reason, array $lang): string {
+    if ($reason === null || $reason === '') {
+        return $lang['label_status_human'];
+    }
+    if (str_starts_with($reason, 'ua:')) {
+        return sprintf($lang['label_reason_pattern'], substr($reason, 3));
+    }
+    return $lang['label_reason_'.$reason] ?? $reason;
 }
 
 /**
@@ -376,8 +621,10 @@ function tr_aggregate_pending(): void {
 function tr_recompute_day(string $date): void {
     global $tracker_db;
 
+    // Half-open range instead of LIKE 'date%' so the ts index can be used.
     $rows = $tracker_db->select('raw_hits', '*', [
-        'ts[~]' => $date.'%',
+        'ts[>=]' => $date,
+        'ts[<]' => date('Y-m-d', strtotime($date.' +1 day')),
         'ORDER' => ['id' => 'ASC'],
     ]);
 
@@ -393,12 +640,18 @@ function tr_recompute_day(string $date): void {
     $site_host = (string) ($settings['site_host'] ?? '');
 
     $pageviews = 0;
+    $bots = 0;
     $visitors = [];
     $per_url = [];   // url => ['views'=>n, 'visitors'=>[hash=>true]]
     $breakdown = []; // "dimension\0value" => count
     $seen_visitor_today = [];
 
     foreach ($rows as $hit) {
+        // Flagged bot hits are only counted, never part of any statistic.
+        if (($hit['bot_reason'] ?? '') !== '') {
+            $bots++;
+            continue;
+        }
         $pageviews++;
         $vh = (string) $hit['visitor_hash'];
         $visitors[$vh] = true;
@@ -437,6 +690,7 @@ function tr_recompute_day(string $date): void {
         'date' => $date,
         'pageviews' => $pageviews,
         'visitors' => count($visitors),
+        'bots' => $bots,
     ]);
 
     foreach ($per_url as $url => $agg) {
@@ -467,15 +721,20 @@ function tr_bump_breakdown(array &$acc, string $dimension, string $value): void 
 
 /**
  * retention_days <= 0 means "keep forever" - an explicit admin choice
- * (backend/settings.php), not just an unset value.
+ * (backend/settings.php), not just an unset value. Flagged bot hits get
+ * their own, usually much shorter window (bot_retention_days, never longer
+ * than retention_days) - they're only kept for inspection.
  */
-function tr_purge_old_raw_hits(int $retention_days): void {
+function tr_purge_old_raw_hits(int $retention_days, int $bot_retention_days = 14): void {
     global $tracker_db;
-    if ($retention_days <= 0) {
-        return;
+    if ($retention_days > 0) {
+        $cutoff = date('Y-m-d H:i:s', strtotime('-'.$retention_days.' days'));
+        $tracker_db->delete('raw_hits', ['ts[<]' => $cutoff]);
     }
-    $cutoff = date('Y-m-d H:i:s', strtotime('-'.$retention_days.' days'));
-    $tracker_db->delete('raw_hits', ['ts[<]' => $cutoff]);
+    if ($bot_retention_days > 0 && ($retention_days <= 0 || $bot_retention_days < $retention_days)) {
+        $cutoff = date('Y-m-d H:i:s', strtotime('-'.$bot_retention_days.' days'));
+        $tracker_db->delete('raw_hits', ['ts[<]' => $cutoff, 'bot_reason[!]' => null]);
+    }
 }
 
 /* -------------------------------------------------------------------

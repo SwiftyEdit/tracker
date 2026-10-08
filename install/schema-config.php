@@ -21,6 +21,14 @@ return [
         'referrer' => 'VARCHAR(1000) NULL',
         'user_agent' => 'VARCHAR(500) NULL',
         'accept_language' => 'VARCHAR(100) NULL',
+        // 1/0 = Sec-Fetch-* request headers present/missing (only judged on
+        // HTTPS requests), NULL = unknown. Input for the header bot filter,
+        // see tr_bot_reason().
+        'has_sec_fetch' => 'INTEGER NULL',
+        // NULL = counted as a visitor. Otherwise why it was classified as a
+        // bot ("no_ua", "ua:<pattern>", "no_lang", "no_sec_fetch") - such
+        // rows are kept for the "Rohdaten" tab but never aggregated.
+        'bot_reason' => 'VARCHAR(120) NULL',
         // Resolved at capture time against ip_ranges (only when
         // geoip_enabled is on) - the raw IP itself is never stored, see
         // tr_capture_hit() in global/functions.php.
@@ -38,6 +46,8 @@ return [
         'date' => 'VARCHAR(10) NOT NULL UNIQUE',
         'pageviews' => 'INTEGER DEFAULT 0',
         'visitors' => 'INTEGER DEFAULT 0',
+        // Filtered bot hits that day - shown, not part of the stats.
+        'bots' => 'INTEGER DEFAULT 0',
     ],
 
     // One row per day+URL - the "top pages" list.

@@ -36,6 +36,7 @@ Seitenaufrufe, Referrer, Browser, Betriebssystem, Gerätetyp, Land und Kampagnen
 
 - **Auswertung**: wie die Übersichtsseite zu lesen ist (Zeitraum, Diagramm, Karten)
 - **Quellen & Kampagnen**: woher Besucher kommen und wie man Newsletter oder Social-Posts erfassbar macht
-- **Einstellungen**: Aufbewahrung, Bot-Filter, eigene Domain
+- **Rohdaten**: einzelne Aufrufe prüfen und Bots erkennen
+- **Einstellungen**: Aufbewahrung, Bot-Erkennung, eigene Domain
 - **GeoIP**: Länder-Erkennung einrichten
 - **Datenschutz & Technik**: was gespeichert wird, wie die Erfassung funktioniert, Einschränkungen

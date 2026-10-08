@@ -18,16 +18,38 @@ deleted automatically.
 - The daily totals, and with them all statistics, are unaffected and always kept.
 - A shorter period keeps the database small and is more data-minimal.
 
-## Filter out bots and crawlers
+## Bot detection
 
-Visits from search-engine crawlers, monitoring services and scripts are not counted. They are
-recognised by their user agent, using a list of patterns (regular expressions separated by `|`).
-The list is prefilled and can be extended.
+The **Bot detection** card decides which hits don't count as visitors. Detected bots aren't
+discarded but stored with a flag: they never show up in any statistic, but can be inspected in
+the **Raw data** tab.
 
+- **Filter out bots and crawlers**: main switch. When off, every hit counts.
+- **Treat requests without typical browser headers as bots** (on by default): real browsers
+  always send a language (`Accept-Language`) and, over HTTPS, the `Sec-Fetch-*` headers. Many
+  scrapers pose as a regular browser user agent but omit these headers. They often rotate IP
+  addresses too, so every hit looks like a new visitor (almost as many visitors as pageviews). A
+  user-agent pattern can't catch such bots, this filter can. The Sec-Fetch check only applies to
+  HTTPS requests.
+- **Custom patterns**: texts contained in the user agent (no regex, case-insensitive). Each
+  pattern shows how many hits in the current raw data it caught. The easiest way to add one is
+  "Mark as bot" in the **Raw data** tab.
+- **Built-in patterns**: a bundled list (search engines, SEO tools, AI crawlers, link previews,
+  HTTP libraries). It is extended with plugin updates.
 - A request without a user agent always counts as a bot.
-- Matching is case-insensitive.
-- An invalid pattern is rejected on save, so capture can't silently break.
-- If the filter is switched off, bots are counted.
+- Patterns that also occur in regular browser user agents (e.g. `chrome`) are rejected so real
+  visitors can't be filtered out by accident.
+- **Keep bot hits (days)**: how long detected bots stay in the raw data (default 14). 0 = as long
+  as the other raw data.
+
+### Correcting the past
+
+Every change to patterns or switches is applied to the existing raw data right away and the
+affected days are recalculated - as far back as raw data exists (see retention). Older days keep
+their numbers. **Re-evaluate raw data** triggers this manually for all raw data at any time.
+
+Sec-Fetch headers are only recorded from version 1.1.0 on. Older hits can only be re-evaluated by
+language and user agent.
 
 ## Resolve country from IP address (GeoIP)
 

@@ -11,7 +11,8 @@ priority: 60
 ## What is stored
 
 Per pageview: timestamp, requested address including parameters, referrer, user agent, browser
-language, a country code (only with GeoIP on) and a visitor hash.
+language, whether Sec-Fetch headers were sent (yes/no), a country code (only with GeoIP on), a
+visitor hash and, if applicable, the reason the hit counts as a bot.
 
 **The IP address is not stored**, not even briefly in the database. It is only used at the
 moment of the request for the hash and the country lookup.
@@ -32,7 +33,8 @@ advice.
 2. There (on PHP-FPM via `fastcgi_finish_request()`) the connection to the visitor is closed. The
    server only then writes the hit to the database. Without FPM the write happens immediately, but
    it is a single database insert.
-3. Administrators and hits recognised as bots are discarded.
+3. Hits from administrators are discarded. Hits recognised as bots are stored with a flag (only for
+   inspection under *Raw data*, deleted after the bot retention period) and never counted.
 4. When the overview is opened (at most every five minutes), new hits are folded into daily totals:
    browser, operating system, device type, source and referrer are determined. Affected days are
    recomputed completely, which keeps visitor counts correct.
