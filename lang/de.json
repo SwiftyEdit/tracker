@@ -49,6 +49,7 @@
   "nav_rawdata": "Rohdaten",
   "title_rawdata": "Rohdaten",
   "intro_rawdata": "Einzelne Seitenaufrufe, bevor sie zu Tagessummen zusammengefasst werden - inklusive der als Bot erkannten. Hier lässt sich nachsehen, was hinter auffälligen Zahlen steckt, und ein User-Agent direkt als Bot markieren.",
+  "msg_raw_db_unavailable": "Die Rohdaten-Datenbank (data/tracker-raw.sqlite3) konnte nicht geöffnet werden. Ist das Verzeichnis data/ beschreibbar? Details stehen im PHP-Fehlerprotokoll.",
   "label_from": "von",
   "placeholder_contains": "enthält ...",
   "th_user_agent": "User-Agent",

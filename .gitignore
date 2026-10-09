@@ -11,6 +11,10 @@ Thumbs.db
 # so PDO has a directory to write tracker.sqlite3 into)
 /data/*.sqlite3
 /data/*.sqlite
+# WAL-mode companion files and leftovers from manual repairs
+/data/*.sqlite3-*
+/data/*.corrupt
+/data/*.tmp
 
 # Admin-uploaded GeoIP CSV snapshot (see install/geoip-import.php); /data/geoip/
 # itself must stay so an upload has somewhere to land.

@@ -269,6 +269,12 @@ if (isset($_GET['show']) && $_GET['show'] === 'settings_form') {
  * -------------------------------------------------------------- */
 if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
 
+    // tr_open_raw_db() failed (logged) - e.g. data/ not writable.
+    if (!isset($tracker_raw_db)) {
+        echo '<div class="alert alert-danger">'.$addon_lang['msg_raw_db_unavailable'].'</div>';
+        exit;
+    }
+
     $today = date('Y-m-d');
     $is_valid_date = fn($s) => is_string($s) && \DateTime::createFromFormat('Y-m-d', $s) !== false && \DateTime::createFromFormat('Y-m-d', $s)->format('Y-m-d') === $s;
 
@@ -326,7 +332,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     echo '</form>';
 
     /* Summary */
-    $sum = $tracker_db->query(
+    $sum = $tracker_raw_db->query(
         "SELECT COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors,
             SUM(bot_reason IS NULL) AS human,
             SUM(bot_reason IS NOT NULL) AS bots,
@@ -340,7 +346,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     )->fetch(\PDO::FETCH_ASSOC);
     $nf = fn($n) => number_format((int) $n, 0, ',', '.');
 
-    $earliest = $tracker_db->query('SELECT MIN(ts) FROM raw_hits')->fetchColumn();
+    $earliest = $tracker_raw_db->query('SELECT MIN(ts) FROM raw_hits')->fetchColumn();
     echo '<p class="small text-muted mb-2">'.sprintf($addon_lang['label_raw_available'], $earliest ? date('d.m.Y', strtotime($earliest)) : '-').'</p>';
 
     $stat = fn($value, $label, $status_link = null) => '<div class="col-6 col-md"><div class="card text-center p-2 h-100">'
@@ -376,7 +382,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     echo '<div class="table-responsive" style="max-height:600px;overflow-y:auto;">';
 
     if ($view === 'agents') {
-        $rows = $tracker_db->query(
+        $rows = $tracker_raw_db->query(
             "SELECT user_agent, COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors, COUNT(DISTINCT url) AS pages,
                 SUM(accept_language IS NULL OR accept_language = '') AS no_lang,
                 SUM(has_sec_fetch = 0) AS no_sec_fetch,
@@ -440,7 +446,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     }
 
     if ($view === 'pages') {
-        $rows = $tracker_db->query(
+        $rows = $tracker_raw_db->query(
             "SELECT url, COUNT(*) AS hits, COUNT(DISTINCT visitor_hash) AS visitors, COUNT(DISTINCT user_agent) AS agents,
                 SUM(bot_reason IS NOT NULL) AS bots
             FROM raw_hits WHERE ".$where_sql." GROUP BY url ORDER BY hits DESC LIMIT 100",
@@ -463,7 +469,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     }
 
     if ($view === 'hits') {
-        $rows = $tracker_db->query(
+        $rows = $tracker_raw_db->query(
             'SELECT ts, url, query_string, referrer, user_agent, accept_language, has_sec_fetch, country_code, bot_reason
             FROM raw_hits WHERE '.$where_sql.' ORDER BY id DESC LIMIT 200',
             $params

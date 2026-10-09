@@ -20,6 +20,15 @@ function tracker_capture_hit_hook($context): void {
     // fires - not at registration time above, which runs on every single
     // frontend request regardless of whether a hit ends up being captured.
     global $tracker_db;
+
+    // Close the visitor's connection before anything touches the database -
+    // connecting can wait up to busy_timeout on a lock (see
+    // tr_db_pragmas()), which must never delay the page itself.
+    // tr_capture_hit() calls this again, a no-op by then.
+    if (function_exists('fastcgi_finish_request')) {
+        fastcgi_finish_request();
+    }
+
     require_once __DIR__.'/../global/bootstrap.php';
 
     tr_capture_hit(is_array($context) ? $context : []);

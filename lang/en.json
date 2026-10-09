@@ -49,6 +49,7 @@
   "nav_rawdata": "Raw data",
   "title_rawdata": "Raw data",
   "intro_rawdata": "Individual pageviews before they are rolled up into daily totals - including the ones detected as bots. Use this to see what is behind suspicious numbers and to mark a user agent as a bot directly.",
+  "msg_raw_db_unavailable": "The raw data database (data/tracker-raw.sqlite3) could not be opened. Is the data/ directory writable? See the PHP error log for details.",
   "label_from": "from",
   "placeholder_contains": "contains ...",
   "th_user_agent": "User agent",

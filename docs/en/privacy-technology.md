@@ -40,8 +40,17 @@ advice.
    recomputed completely, which keeps visitor counts correct.
 5. Finally, raw data older than the configured retention is deleted.
 
-Data is stored in `plugins/tracker/data/tracker.sqlite3`. The chart uses the bundled Chart.js
-library (MIT license), no external services are loaded.
+Data is stored in two files in `plugins/tracker/data/`:
+
+- `tracker.sqlite3` holds settings, daily totals and GeoIP data. It is small and only written during
+  aggregation. A copy is saved once a day as `tracker-backup.sqlite3`.
+- `tracker-raw.sqlite3` holds only the raw data (individual pageviews) and is written on every pageview.
+  If this file is lost, only the pageviews since the last aggregation are missing.
+
+Never copy or overwrite these files on their own while the site is live. Make copies with
+`sqlite3 tracker.sqlite3 ".backup copy.sqlite3"` or with the Parachute backup plugin.
+
+The chart uses the bundled Chart.js library (MIT license), no external services are loaded.
 
 ## Known limitations (v1)
 

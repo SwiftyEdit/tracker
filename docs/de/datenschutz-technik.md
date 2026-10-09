@@ -41,8 +41,18 @@ Einzelfall ab. Das ersetzt keine Rechtsberatung.
    Tage werden dabei komplett neu berechnet, so bleiben die Besucherzahlen korrekt.
 5. Zuletzt werden Rohdaten gelöscht, die älter sind als die eingestellte Aufbewahrungsdauer.
 
-Gespeichert wird in `plugins/tracker/data/tracker.sqlite3`. Das Diagramm nutzt die mitgelieferte
-Bibliothek Chart.js (MIT-Lizenz), es werden keine externen Dienste geladen.
+Gespeichert wird in zwei Dateien in `plugins/tracker/data/`:
+
+- `tracker.sqlite3` enthält Einstellungen, Tagessummen und GeoIP-Daten. Diese Datei ist klein und wird nur
+  beim Auswerten beschrieben. Einmal täglich wird eine Kopie davon als `tracker-backup.sqlite3` abgelegt.
+- `tracker-raw.sqlite3` enthält nur die Rohdaten (einzelne Aufrufe) und wird bei jedem Aufruf beschrieben.
+  Geht diese Datei verloren, fehlen höchstens die Aufrufe seit der letzten Auswertung.
+
+Die Dateien nie einzeln per FTP kopieren oder überschreiben, solange die Seite läuft. Kopien nur mit
+`sqlite3 tracker.sqlite3 ".backup kopie.sqlite3"` oder mit dem Backup-Plugin Parachute anlegen.
+
+Das Diagramm nutzt die mitgelieferte Bibliothek Chart.js (MIT-Lizenz), es werden keine externen Dienste
+geladen.
 
 ## Einschränkungen (Stand v1)
 

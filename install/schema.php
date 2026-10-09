@@ -3,6 +3,13 @@
 class TrackerSchema
 {
     /**
+     * Tables living in data/tracker-raw.sqlite3 instead of the main
+     * tracker.sqlite3 - see the "Two database files" note in
+     * global/functions.php.
+     */
+    public const RAW_TABLES = ['raw_hits'];
+
+    /**
      * Load schema configuration.
      */
     private static function getConfig(): array
@@ -11,13 +18,23 @@ class TrackerSchema
     }
 
     /**
-     * Return pure column definitions for all tables.
+     * Column definitions for the tables in the main tracker.sqlite3.
      *
      * @return array<string, array<string, string>>
      */
     public static function getTables(): array
     {
-        return self::getConfig();
+        return array_diff_key(self::getConfig(), array_flip(self::RAW_TABLES));
+    }
+
+    /**
+     * Column definitions for the tables in tracker-raw.sqlite3.
+     *
+     * @return array<string, array<string, string>>
+     */
+    public static function getRawTables(): array
+    {
+        return array_intersect_key(self::getConfig(), array_flip(self::RAW_TABLES));
     }
 
     /**

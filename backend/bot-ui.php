@@ -9,7 +9,7 @@
  */
 
 function tr_render_bot_card(string $message = ''): string {
-    global $tracker_db, $addon_lang;
+    global $tracker_raw_db, $addon_lang;
 
     $settings = tr_get_settings();
     $custom = tr_custom_bot_patterns($settings);
@@ -19,7 +19,7 @@ function tr_render_bot_card(string $message = ''): string {
 
     // Raw hits per bot_reason, to show what each rule actually catches.
     $reason_counts = [];
-    $rows = $tracker_db->query('SELECT bot_reason, COUNT(*) AS n FROM raw_hits WHERE bot_reason IS NOT NULL GROUP BY bot_reason')->fetchAll(\PDO::FETCH_ASSOC);
+    $rows = !isset($tracker_raw_db) ? [] : $tracker_raw_db->query('SELECT bot_reason, COUNT(*) AS n FROM raw_hits WHERE bot_reason IS NOT NULL GROUP BY bot_reason')->fetchAll(\PDO::FETCH_ASSOC);
     foreach ($rows as $r) {
         $reason_counts[$r['bot_reason']] = (int) $r['n'];
     }

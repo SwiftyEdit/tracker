@@ -3,8 +3,7 @@
  * @var string $tracker_db_file from bootstrap.php
  * @var string $mod_root
  */
-use Medoo\Medoo;
-include __DIR__.'/schema.php';
+require_once __DIR__.'/schema.php';
 
 
 /* INSTALL */
@@ -17,10 +16,9 @@ if(!is_file("$tracker_db_file")) {
 
     echo '<p class="alert alert-info">We try to generate SQLite File: '.$tracker_db_file.'</p>';
 
-        $tracker_db = new Medoo([
-            'type' => 'sqlite',
-            'database' => $tracker_db_file
-        ]);
+        // raw_hits (tracker-raw.sqlite3) is created right after this by
+        // tr_open_raw_db() in global/bootstrap.php.
+        $tracker_db = tr_connect($tracker_db_file);
 
         $tables = TrackerSchema::getTables();
 
@@ -36,10 +34,8 @@ if(!is_file("$tracker_db_file")) {
             $tracker_db->query($sql)->execute();
         }
 
-        // Lookup indexes - raw_hits is written on (almost) every frontend
-        // request and read back in full during aggregation, ip_ranges is
-        // queried with a range BETWEEN on every GeoIP lookup.
-        $tracker_db->query("CREATE INDEX IF NOT EXISTS idx_raw_hits_ts ON raw_hits (ts)")->execute();
+        // Lookup indexes - ip_ranges is queried on every GeoIP lookup. The
+        // raw_hits index lives in tr_raw_table_sql().
         $tracker_db->query("CREATE INDEX IF NOT EXISTS idx_daily_pageviews_date ON daily_pageviews (date)")->execute();
         $tracker_db->query("CREATE INDEX IF NOT EXISTS idx_daily_breakdown_date ON daily_breakdown (date, dimension)")->execute();
         $tracker_db->query("CREATE INDEX IF NOT EXISTS idx_ip_ranges_start ON ip_ranges (range_start)")->execute();

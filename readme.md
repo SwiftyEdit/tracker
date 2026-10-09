@@ -51,6 +51,35 @@ All downloadable directly from `https://github.com/sapics/ip-location-db/release
 no signup. If you import a DB-IP or GeoLite2 file, keep the required attribution somewhere
 visible on your site (e.g. the imprint/privacy page) per that dataset's license.
 
+## Database file
+
+Data is split over two SQLite files in `data/`, both in WAL mode (set automatically on every
+connection):
+
+- `tracker.sqlite3`: settings, daily aggregates, GeoIP ranges. Small, written only during
+  aggregation. These aggregates can't be rebuilt once the raw hits behind them are purged, so a
+  snapshot is written once a day to `tracker-backup.sqlite3`.
+- `tracker-raw.sqlite3`: raw hits only, written on every pageview. Losing it costs at most the hits
+  since the last aggregation. If it goes missing, a new one is created automatically.
+
+Installs from 1.1.1 or older keep everything in `tracker.sqlite3`. The first backend visit after
+the update moves the raw hits into `tracker-raw.sqlite3`. This happens once and can take a few
+seconds on a large table.
+
+`data/` must be writable, because SQLite keeps `-wal` and `-shm` files next to each database. The
+databases must not be on a network filesystem (NFS).
+
+**Never copy or overwrite the database files on their own while the site is live.** Recent writes may
+still be in the `-wal` file only, so a plain file copy (FTP, `cp`) can be incomplete or
+corrupt. Overwriting the live file while a `-wal` file sits next to it corrupts the database.
+Make copies with SQLite itself instead:
+
+```
+sqlite3 tracker.sqlite3 ".backup copy.sqlite3"
+```
+
+The Parachute backup plugin already does this (`VACUUM INTO`).
+
 ## Not included yet (v1)
 
 - No custom date-range picker on the overview page yet (fixed last-30-days window).

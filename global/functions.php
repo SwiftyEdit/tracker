@@ -21,6 +21,264 @@
  * Settings
  * ---------------------------------------------------------------- */
 
+/**
+ * Passed as Medoo's 'command' option (global/bootstrap.php,
+ * install/installer.php): wait up to 5s for a competing writer (e.g. a
+ * long bot reclassification) instead of failing right away with "database
+ * is locked" - frontend hits would otherwise be lost.
+ *
+ * Only pragmas that never touch the file belong here - Medoo runs these in
+ * its constructor and throws if one fails, see tr_configure_db().
+ */
+function tr_db_pragmas(): array {
+    return [
+        'PRAGMA busy_timeout = 5000',
+    ];
+}
+
+/**
+ * Connection settings that have to read the database file and can
+ * therefore hit a lock - kept out of Medoo's constructor (tr_db_pragmas())
+ * so a lock leaves the old setting in place instead of failing the whole
+ * connection. Retried on every connection.
+ *
+ * - journal_mode = WAL: frontend hits keep writing while the backend reads
+ *   or aggregates, instead of queueing behind each other. Stored in the
+ *   file itself, so once set this is a cheap no-op - checking every time
+ *   also switches back a database that was restored from an older copy.
+ *   Requires data/ to be writable for the -wal/-shm files next to it.
+ * - synchronous = NORMAL: safe in WAL mode (a crash can lose the last
+ *   commits, never corrupt the file), saves an fsync per hit. Not stored
+ *   in the file, hence per connection.
+ */
+function tr_configure_db(\Medoo\Medoo $db): void {
+    try {
+        $mode = $db->pdo->query('PRAGMA journal_mode')->fetchColumn();
+        if (strtolower((string) $mode) !== 'wal') {
+            $db->pdo->exec('PRAGMA journal_mode = WAL');
+        }
+        $db->pdo->exec('PRAGMA synchronous = NORMAL');
+    } catch (\PDOException $e) {
+        // Locked right now - defaults stay in place until the next try.
+    }
+}
+
+function tr_connect(string $file): \Medoo\Medoo {
+    $db = new \Medoo\Medoo([
+        'type' => 'sqlite',
+        'database' => $file,
+        'command' => tr_db_pragmas(),
+    ]);
+    tr_configure_db($db);
+    return $db;
+}
+
+function tr_data_dir(): string {
+    return dirname(__DIR__).'/data/';
+}
+
+function tr_table_exists(\Medoo\Medoo $db, string $table): bool {
+    $stmt = $db->query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :t", [':t' => $table]
+    );
+    $exists = (bool) $stmt->fetchColumn();
+    // Medoo keeps the last statement alive - left half-read, it counts as
+    // "in progress" and blocks a later VACUUM (tr_migrate_raw_hits()).
+    $stmt->closeCursor();
+    return $exists;
+}
+
+/* -------------------------------------------------------------------
+ * Two database files (since 1.1.2):
+ *
+ * - tracker.sqlite3: settings, daily_* aggregates, ip_ranges. Small,
+ *   written only during aggregation - and the part that can't be rebuilt
+ *   once raw_hits has been purged, so it gets a daily snapshot
+ *   (tr_backup_main_db()).
+ * - tracker-raw.sqlite3: raw_hits only. Large, written on every frontend
+ *   hit. Losing it costs at most the hits not aggregated yet.
+ *
+ * $tracker_db / $tracker_raw_db, both set up in global/bootstrap.php.
+ * ---------------------------------------------------------------- */
+
+/**
+ * Connection for raw_hits. Returns the main connection itself while the
+ * old single-file layout hasn't been migrated yet (backend not opened
+ * since the update, see tr_migrate_raw_hits()) - hits keep going to the
+ * old table until then. Recreates a missing raw file otherwise (deleted
+ * or lost), so capture just continues; tr_aggregate_pending() notices
+ * the restarted ids. null if even that fails (e.g. data/ not writable).
+ */
+function tr_open_raw_db(\Medoo\Medoo $main, string $raw_file): ?\Medoo\Medoo {
+    try {
+        if (is_file($raw_file)) {
+            return tr_connect($raw_file);
+        }
+        if (tr_table_exists($main, 'raw_hits')) {
+            return $main;
+        }
+        tr_create_raw_db($raw_file);
+        return tr_connect($raw_file);
+    } catch (\Throwable $e) {
+        error_log('tracker: raw database unavailable: '.$e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Builds an empty raw database under a temporary name and renames it into
+ * place, so a concurrent request never sees a file without its table.
+ */
+function tr_create_raw_db(string $raw_file): void {
+    require_once dirname(__DIR__).'/install/schema.php';
+
+    $tmp = $raw_file.'.'.bin2hex(random_bytes(4)).'.tmp';
+    $pdo = new \PDO('sqlite:'.$tmp);
+    $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+    foreach (tr_raw_table_sql() as $sql) {
+        $pdo->exec($sql);
+    }
+    $pdo = null;
+
+    if (!rename($tmp, $raw_file)) {
+        @unlink($tmp);
+        throw new \RuntimeException('could not create '.$raw_file);
+    }
+}
+
+/**
+ * CREATE statements for the raw database, with an optional schema prefix
+ * ("raw.") for use on an ATTACHed file.
+ *
+ * @return string[]
+ */
+function tr_raw_table_sql(string $schema = ''): array {
+    $sql = [];
+    foreach (TrackerSchema::getRawTables() as $table => $columns) {
+        $defs = [];
+        foreach ($columns as $col => $type) {
+            $defs[] = "$col $type";
+        }
+        $sql[] = "CREATE TABLE IF NOT EXISTS {$schema}{$table} (".implode(', ', $defs).')';
+    }
+    $sql[] = "CREATE INDEX IF NOT EXISTS {$schema}idx_raw_hits_ts ON raw_hits (ts)";
+    return $sql;
+}
+
+/**
+ * One-time move of raw_hits out of tracker.sqlite3 (1.1.1 and older) into
+ * tracker-raw.sqlite3. Backend only - can take a few seconds on a large
+ * table. Does nothing once the table is gone from the main file.
+ *
+ * A second connection holds the main file's write lock throughout, so
+ * frontend hits still writing to the old table wait (busy_timeout) instead
+ * of landing after the copy was taken. Those few that wait past the drop
+ * find the table gone and are lost - a one-time handful. The finished
+ * copy is renamed into place before the old table is dropped, so a hit
+ * arriving in between always finds one or the other.
+ */
+function tr_migrate_raw_hits(\Medoo\Medoo $main, string $main_file, string $raw_file): void {
+    if (!tr_table_exists($main, 'raw_hits')) {
+        return;
+    }
+    if (is_file($raw_file)) {
+        // Both exist - a previous run got past the rename but not the drop.
+        // The raw file is the live one by now; it already holds every row
+        // the old table had at that point.
+        $main->pdo->exec('DROP TABLE raw_hits');
+        return;
+    }
+
+    require_once dirname(__DIR__).'/install/schema.php';
+    @set_time_limit(300);
+
+    $tmp = $raw_file.'.migrate.tmp';
+    @unlink($tmp);
+
+    $lock = new \PDO('sqlite:'.$main_file);
+    $lock->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+    $lock->exec('PRAGMA busy_timeout = 5000');
+    $lock->exec('BEGIN IMMEDIATE');
+
+    try {
+        $copy = new \PDO('sqlite:'.$main_file);
+        $copy->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
+        $copy->exec('ATTACH DATABASE '.$copy->quote($tmp).' AS raw');
+        foreach (tr_raw_table_sql('raw.') as $sql) {
+            $copy->exec($sql);
+        }
+
+        // Explicit column list - columns added later via ALTER TABLE sit in
+        // a different order in old installs than in schema-config.php.
+        $existing = array_column($copy->query('PRAGMA main.table_info(raw_hits)')->fetchAll(\PDO::FETCH_ASSOC), 'name');
+        $cols = implode(', ', array_intersect(array_keys(TrackerSchema::getTableColumns('raw_hits')), $existing));
+        $copy->exec("INSERT INTO raw.raw_hits ($cols) SELECT $cols FROM main.raw_hits ORDER BY id");
+
+        // Keep the id counter where it was, even past MAX(id) - ids must
+        // never repeat, the aggregation watermark relies on that.
+        $seq = max(
+            (int) $copy->query("SELECT seq FROM main.sqlite_sequence WHERE name = 'raw_hits'")->fetchColumn(),
+            (int) $copy->query('SELECT MAX(id) FROM raw.raw_hits')->fetchColumn()
+        );
+        $copy->exec("DELETE FROM raw.sqlite_sequence WHERE name = 'raw_hits'");
+        $copy->exec("INSERT INTO raw.sqlite_sequence (name, seq) VALUES ('raw_hits', $seq)");
+
+        $copy->exec('DETACH DATABASE raw');
+        $copy = null;
+
+        if (!rename($tmp, $raw_file)) {
+            throw new \RuntimeException('could not rename '.$tmp);
+        }
+
+        $lock->exec('DROP TABLE raw_hits');
+        $lock->exec('COMMIT');
+    } catch (\Throwable $e) {
+        if ($lock->inTransaction()) {
+            $lock->exec('ROLLBACK');
+        }
+        $copy = null;
+        @unlink($tmp);
+        throw $e;
+    }
+    $lock = null;
+
+    // Give the freed pages back - the main file shrinks to its small,
+    // aggregates-only size. Not critical if it fails (locked).
+    try {
+        $main->pdo->exec('VACUUM');
+    } catch (\PDOException $e) {
+    }
+}
+
+/**
+ * Daily snapshot of tracker.sqlite3 (data/tracker-backup.sqlite3) - the
+ * aggregates in there are the only data that can't be recomputed once
+ * raw_hits has been purged. Called from tr_aggregate_pending(), so only
+ * ever in the backend. Written under a temporary name and renamed, so the
+ * last good snapshot survives a failed run.
+ */
+function tr_backup_main_db(): void {
+    global $tracker_db;
+
+    $settings = tr_get_settings();
+    if (($settings['last_backup_date'] ?? '') === date('Y-m-d')) {
+        return;
+    }
+
+    $target = tr_data_dir().'tracker-backup.sqlite3';
+    $tmp = $target.'.tmp';
+    @unlink($tmp);
+    try {
+        $tracker_db->pdo->exec('VACUUM INTO '.$tracker_db->pdo->quote($tmp));
+        if (rename($tmp, $target)) {
+            tr_save_setting('last_backup_date', date('Y-m-d'));
+        }
+    } catch (\PDOException $e) {
+        @unlink($tmp);
+        error_log('tracker: backup failed: '.$e->getMessage());
+    }
+}
+
 function tr_get_settings(): array {
     global $tracker_db;
 
@@ -86,6 +344,8 @@ function tr_get_default_settings(): array {
         // if it last ran less than a few minutes ago, so opening the stats
         // page repeatedly doesn't repeatedly redo the same work.
         'last_aggregated_at' => 0,
+        // Date of the last daily snapshot, see tr_backup_main_db().
+        'last_backup_date' => '',
     ];
 }
 
@@ -289,10 +549,11 @@ function tr_suggest_bot_pattern(string $ua): string {
 /**
  * Ensure table exists and matches current schema.
  */
-function tr_updateOrCreateTable(string $table_name, array $expected_columns): void {
+function tr_updateOrCreateTable(string $table_name, array $expected_columns, ?\Medoo\Medoo $db = null): void {
     global $tracker_db;
+    $db = $db ?? $tracker_db;
 
-    $tables = $tracker_db->query("
+    $tables = $db->query("
     SELECT name FROM sqlite_master
     WHERE type='table' AND name = '$table_name' ")->fetchAll();
 
@@ -302,18 +563,18 @@ function tr_updateOrCreateTable(string $table_name, array $expected_columns): vo
             $col_definitions[] = "$col_name $col_type";
         }
         $sql = "CREATE TABLE IF NOT EXISTS $table_name (" . implode(', ', $col_definitions) . ")";
-        $tracker_db->query($sql);
+        $db->query($sql);
         echo "Created table $table_name<br>";
         return;
     }
 
-    $tableInfo = $tracker_db->query("PRAGMA table_info($table_name)")->fetchAll();
+    $tableInfo = $db->query("PRAGMA table_info($table_name)")->fetchAll();
     $existing_columns = array_column($tableInfo, 'name');
 
     foreach ($expected_columns as $col_name => $col_type) {
         if (!in_array($col_name, $existing_columns, true)) {
             $sql = "ALTER TABLE $table_name ADD COLUMN $col_name $col_type";
-            $result = $tracker_db->query($sql);
+            $result = $db->query($sql);
             if ($result !== false) {
                 echo "Added column $col_name to $table_name<br>";
             }
@@ -346,12 +607,13 @@ function tr_hint_icon(string $hint): string {
  * sendBeacon()-based design).
  */
 function tr_capture_hit(array $context = []): void {
-    global $tracker_db;
+    global $tracker_db, $tracker_raw_db;
 
     // Nothing to do if the plugin's database hasn't been created yet (see
     // global/bootstrap.php - only ever auto-created from a real ACP
-    // request, never as a side effect of a random frontend visitor).
-    if (!isset($tracker_db)) {
+    // request, never as a side effect of a random frontend visitor), or
+    // the raw file can't be opened (see tr_open_raw_db()).
+    if (!isset($tracker_db, $tracker_raw_db)) {
         return;
     }
 
@@ -413,18 +675,42 @@ function tr_capture_hit(array $context = []): void {
     ];
 
     try {
-        $tracker_db->insert('raw_hits', $row);
+        try {
+            $tracker_raw_db->insert('raw_hits', $row);
+        } catch (\PDOException $e) {
+            // Waited for the old table while tr_migrate_raw_hits() moved it
+            // into its own file - by now that file is in place.
+            if ($tracker_raw_db !== $tracker_db || !str_contains($e->getMessage(), 'no such table')) {
+                throw $e;
+            }
+            $tracker_raw_db = tr_open_raw_db($tracker_db, tr_data_dir().'tracker-raw.sqlite3');
+            if ($tracker_raw_db === null || $tracker_raw_db === $tracker_db) {
+                throw $e;
+            }
+            $tracker_raw_db->insert('raw_hits', $row);
+        }
     } catch (\PDOException $e) {
-        // Plugin files were updated but install/updater.php hasn't run yet
-        // (it only runs on the next backend visit) - add the missing
-        // columns here so frontend hits aren't lost in the meantime.
+        // Only a missing column is repairable here: plugin files were
+        // updated but install/updater.php hasn't run yet (it only runs on
+        // the next backend visit) - add the columns so frontend hits aren't
+        // lost in the meantime. Anything else (e.g. still locked after
+        // busy_timeout) must not end up in schema repair - the hit is lost,
+        // but logged.
+        if (!str_contains($e->getMessage(), 'has no column')) {
+            error_log('tracker: hit not stored: '.$e->getMessage());
+            return;
+        }
         // tr_updateOrCreateTable() echoes progress, which must not leak
         // into the page when there's no FPM to have closed it already.
         ob_start();
         require_once __DIR__.'/../install/schema.php';
-        tr_updateOrCreateTable('raw_hits', TrackerSchema::getTableColumns('raw_hits'));
+        tr_updateOrCreateTable('raw_hits', TrackerSchema::getTableColumns('raw_hits'), $tracker_raw_db);
         ob_end_clean();
-        $tracker_db->insert('raw_hits', $row);
+        try {
+            $tracker_raw_db->insert('raw_hits', $row);
+        } catch (\PDOException $e) {
+            error_log('tracker: hit not stored: '.$e->getMessage());
+        }
     }
 }
 
@@ -542,26 +828,34 @@ function tr_maybe_aggregate(int $min_interval_seconds = 300): void {
  * increment, acceptable for a lazily/infrequently triggered job.
  */
 function tr_aggregate_pending(): void {
-    global $tracker_db;
-    if (!isset($tracker_db)) {
+    global $tracker_db, $tracker_raw_db;
+    if (!isset($tracker_db, $tracker_raw_db)) {
         return;
     }
 
     $settings = tr_get_settings();
     $watermark = (int) ($settings['agg_watermark_id'] ?? 0);
 
-    $rows = $tracker_db->select('raw_hits', ['id', 'ts'], ['id[>]' => $watermark]);
+    // Only the touched dates and the new watermark are needed - let SQLite
+    // compute them instead of loading every pending row into PHP.
+    $max_id = (int) $tracker_raw_db->query('SELECT MAX(id) FROM raw_hits')->fetchColumn();
 
-    if ($rows) {
-        $max_id = $watermark;
-        $dates = [];
-        foreach ($rows as $r) {
-            $max_id = max($max_id, (int) $r['id']);
-            $dates[substr((string) $r['ts'], 0, 10)] = true;
-        }
+    // Ids only ever grow (AUTOINCREMENT, carried over by
+    // tr_migrate_raw_hits()) - unless the raw file was lost and started
+    // fresh (tr_open_raw_db()). Its ids then begin again below the
+    // watermark, which would hide every new hit from aggregation.
+    if ($max_id < $watermark) {
+        $watermark = 0;
+    }
 
-        foreach (array_keys($dates) as $date) {
-            tr_recompute_day($date);
+    if ($max_id > $watermark) {
+        $dates = $tracker_raw_db->query(
+            'SELECT DISTINCT substr(ts, 1, 10) FROM raw_hits WHERE id > :wm AND id <= :max',
+            [':wm' => $watermark, ':max' => $max_id]
+        )->fetchAll(\PDO::FETCH_COLUMN);
+
+        foreach ($dates as $date) {
+            tr_recompute_day((string) $date);
         }
 
         tr_save_setting('agg_watermark_id', $max_id);
@@ -569,6 +863,8 @@ function tr_aggregate_pending(): void {
 
     tr_purge_old_raw_hits((int) ($settings['retention_days'] ?? 90), (int) ($settings['bot_retention_days'] ?? 14));
     tr_save_setting('last_aggregated_at', time());
+
+    tr_backup_main_db();
 }
 
 /**
@@ -580,48 +876,15 @@ function tr_aggregate_pending(): void {
  * @return array{checked:int, changed:int, days:int}
  */
 function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []): array {
-    global $tracker_db;
+    global $tracker_raw_db;
 
     $settings = tr_get_settings();
     $rules = tr_bot_rules($settings);
     $checked = 0;
     $changed = 0;
-    $dates = [];
     $last_id = 0;
-
-    $sql = 'SELECT id, ts, user_agent, accept_language, has_sec_fetch, bot_reason FROM raw_hits WHERE id > :last_id'
-        .($extra_sql !== '' ? ' AND ('.$extra_sql.')' : '')
-        .' ORDER BY id ASC LIMIT 5000';
-
-    // Chunked by id so memory stays flat however large raw_hits has grown;
-    // one transaction around all updates keeps SQLite from syncing to disk
-    // after every single statement.
-    $tracker_db->action(function ($db) use ($sql, $extra_params, $rules, &$checked, &$changed, &$dates, &$last_id) {
-        while (true) {
-            $rows = $db->query($sql, [':last_id' => $last_id] + $extra_params)->fetchAll(\PDO::FETCH_ASSOC);
-            if (!$rows) {
-                break;
-            }
-            $updates = []; // new reason ('' = human) => [ids]
-            foreach ($rows as $r) {
-                $last_id = (int) $r['id'];
-                $checked++;
-                $sec_fetch = $r['has_sec_fetch'] === null ? null : (int) $r['has_sec_fetch'];
-                $new = tr_bot_reason((string) $r['user_agent'], (string) $r['accept_language'], $sec_fetch, $rules);
-                $old = ($r['bot_reason'] ?? '') !== '' ? $r['bot_reason'] : null;
-                if ($new !== $old) {
-                    $updates[$new ?? ''][] = $last_id;
-                    $dates[substr((string) $r['ts'], 0, 10)] = true;
-                    $changed++;
-                }
-            }
-            foreach ($updates as $reason => $ids) {
-                foreach (array_chunk($ids, 500) as $chunk) {
-                    $db->update('raw_hits', ['bot_reason' => $reason === '' ? null : $reason], ['id' => $chunk]);
-                }
-            }
-        }
-    });
+    $pending = [];   // date => true, changed but not recomputed yet
+    $recomputed = 0;
 
     // The oldest day may already be partly purged by retention_days -
     // recomputing it from what's left would undercount it, so it (and
@@ -629,13 +892,65 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
     $retention_days = (int) ($settings['retention_days'] ?? 90);
     $oldest_complete = $retention_days > 0 ? date('Y-m-d', strtotime('-'.($retention_days - 1).' days')) : '';
 
-    $recomputed = 0;
-    foreach (array_keys($dates) as $date) {
-        if ($date >= $oldest_complete) {
-            tr_recompute_day($date);
-            $recomputed++;
+    $recompute = function (?string $before) use (&$pending, &$recomputed, $oldest_complete) {
+        foreach (array_keys($pending) as $date) {
+            if ($before !== null && $date >= $before) {
+                continue;
+            }
+            unset($pending[$date]);
+            if ($date >= $oldest_complete) {
+                tr_recompute_day($date);
+                $recomputed++;
+            }
+        }
+    };
+
+    $sql = 'SELECT id, ts, user_agent, accept_language, has_sec_fetch, bot_reason FROM raw_hits WHERE id > :last_id'
+        .($extra_sql !== '' ? ' AND ('.$extra_sql.')' : '')
+        .' ORDER BY id ASC LIMIT 5000';
+
+    // Chunked by id so memory stays flat however large raw_hits has grown,
+    // and one short transaction per chunk: a single one around everything
+    // would hold the write lock for the whole run - on a large table far
+    // longer than the 5s busy_timeout frontend hits wait before giving up.
+    while (true) {
+        $rows = $tracker_raw_db->query($sql, [':last_id' => $last_id] + $extra_params)->fetchAll(\PDO::FETCH_ASSOC);
+        if (!$rows) {
+            break;
+        }
+
+        // ids grow with time, so every day before this chunk's first hit
+        // is fully re-evaluated - recompute it now rather than at the end.
+        // A run that dies halfway (time limit) then leaves stats matching
+        // the bot flags already committed, except for the day in progress.
+        $recompute(substr((string) $rows[0]['ts'], 0, 10));
+
+        $updates = []; // new reason ('' = human) => [ids]
+        foreach ($rows as $r) {
+            $last_id = (int) $r['id'];
+            $checked++;
+            $sec_fetch = $r['has_sec_fetch'] === null ? null : (int) $r['has_sec_fetch'];
+            $new = tr_bot_reason((string) $r['user_agent'], (string) $r['accept_language'], $sec_fetch, $rules);
+            $old = ($r['bot_reason'] ?? '') !== '' ? $r['bot_reason'] : null;
+            if ($new !== $old) {
+                $updates[$new ?? ''][] = $last_id;
+                $pending[substr((string) $r['ts'], 0, 10)] = true;
+                $changed++;
+            }
+        }
+
+        if ($updates) {
+            $tracker_raw_db->action(function ($db) use ($updates) {
+                foreach ($updates as $reason => $ids) {
+                    foreach (array_chunk($ids, 500) as $chunk) {
+                        $db->update('raw_hits', ['bot_reason' => $reason === '' ? null : $reason], ['id' => $chunk]);
+                    }
+                }
+            });
         }
     }
+
+    $recompute(null);
 
     return ['checked' => $checked, 'changed' => $changed, 'days' => $recomputed];
 }
@@ -668,22 +983,18 @@ function tr_bot_reason_label(?string $reason, array $lang): string {
  * increments.
  */
 function tr_recompute_day(string $date): void {
-    global $tracker_db;
+    global $tracker_db, $tracker_raw_db;
 
     // Half-open range instead of LIKE 'date%' so the ts index can be used.
-    $rows = $tracker_db->select('raw_hits', '*', [
-        'ts[>=]' => $date,
-        'ts[<]' => date('Y-m-d', strtotime($date.' +1 day')),
-        'ORDER' => ['id' => 'ASC'],
-    ]);
-
-    $tracker_db->delete('daily_totals', ['date' => $date]);
-    $tracker_db->delete('daily_pageviews', ['date' => $date]);
-    $tracker_db->delete('daily_breakdown', ['date' => $date]);
-
-    if (!$rows) {
-        return;
-    }
+    // Iterated row by row instead of select()'s fetchAll() - a busy day
+    // holds tens of thousands of hits, which as one array blew past a
+    // 128M memory_limit and killed the whole overview page.
+    $stmt = $tracker_raw_db->query(
+        'SELECT visitor_hash, url, user_agent, country_code, referrer, query_string, bot_reason
+         FROM raw_hits WHERE ts >= :from AND ts < :to ORDER BY id ASC',
+        [':from' => $date, ':to' => date('Y-m-d', strtotime($date.' +1 day'))]
+    );
+    $stmt->setFetchMode(\PDO::FETCH_ASSOC);
 
     $settings = tr_get_settings();
     $site_host = (string) ($settings['site_host'] ?? '');
@@ -695,7 +1006,7 @@ function tr_recompute_day(string $date): void {
     $breakdown = []; // "dimension\0value" => count
     $seen_visitor_today = [];
 
-    foreach ($rows as $hit) {
+    foreach ($stmt as $hit) {
         // Flagged bot hits are only counted, never part of any statistic.
         if (($hit['bot_reason'] ?? '') !== '') {
             $bots++;
@@ -726,7 +1037,7 @@ function tr_recompute_day(string $date): void {
         // Source/campaign attribution only for the chronologically first
         // hit of this visitor on this day - see the plugin's project
         // memory ("Attribution granularity"): keeps a multi-page visit from
-        // diluting/multiplying its own campaign count. $rows is ordered by
+        // diluting/multiplying its own campaign count. The query is ordered by
         // id ASC above, so "first seen in this loop" is chronological.
         if (!isset($seen_visitor_today[$vh])) {
             $seen_visitor_today[$vh] = true;
@@ -734,32 +1045,46 @@ function tr_recompute_day(string $date): void {
             tr_bump_breakdown($breakdown, 'source', $source);
         }
     }
+    $stmt->closeCursor();
+    $has_rows = ($pageviews + $bots) > 0;
 
-    $tracker_db->insert('daily_totals', [
-        'date' => $date,
-        'pageviews' => $pageviews,
-        'visitors' => count($visitors),
-        'bots' => $bots,
-    ]);
+    // Replace the day in one transaction: readers never see it half
+    // written, and SQLite syncs once instead of after every insert.
+    $tracker_db->action(function ($db) use ($date, $has_rows, $pageviews, $bots, $visitors, $per_url, $breakdown) {
+        $db->delete('daily_totals', ['date' => $date]);
+        $db->delete('daily_pageviews', ['date' => $date]);
+        $db->delete('daily_breakdown', ['date' => $date]);
 
-    foreach ($per_url as $url => $agg) {
-        $tracker_db->insert('daily_pageviews', [
+        if (!$has_rows) {
+            return;
+        }
+
+        $db->insert('daily_totals', [
             'date' => $date,
-            'url' => $url,
-            'views' => $agg['views'],
-            'visitors' => count($agg['visitors']),
+            'pageviews' => $pageviews,
+            'visitors' => count($visitors),
+            'bots' => $bots,
         ]);
-    }
 
-    foreach ($breakdown as $key => $count) {
-        [$dimension, $value] = explode("\0", $key, 2);
-        $tracker_db->insert('daily_breakdown', [
-            'date' => $date,
-            'dimension' => $dimension,
-            'value' => $value,
-            'count' => $count,
-        ]);
-    }
+        foreach ($per_url as $url => $agg) {
+            $db->insert('daily_pageviews', [
+                'date' => $date,
+                'url' => $url,
+                'views' => $agg['views'],
+                'visitors' => count($agg['visitors']),
+            ]);
+        }
+
+        foreach ($breakdown as $key => $count) {
+            [$dimension, $value] = explode("\0", $key, 2);
+            $db->insert('daily_breakdown', [
+                'date' => $date,
+                'dimension' => $dimension,
+                'value' => $value,
+                'count' => $count,
+            ]);
+        }
+    });
 }
 
 function tr_bump_breakdown(array &$acc, string $dimension, string $value): void {
@@ -775,14 +1100,14 @@ function tr_bump_breakdown(array &$acc, string $dimension, string $value): void 
  * than retention_days) - they're only kept for inspection.
  */
 function tr_purge_old_raw_hits(int $retention_days, int $bot_retention_days = 14): void {
-    global $tracker_db;
+    global $tracker_raw_db;
     if ($retention_days > 0) {
         $cutoff = date('Y-m-d H:i:s', strtotime('-'.$retention_days.' days'));
-        $tracker_db->delete('raw_hits', ['ts[<]' => $cutoff]);
+        $tracker_raw_db->delete('raw_hits', ['ts[<]' => $cutoff]);
     }
     if ($bot_retention_days > 0 && ($retention_days <= 0 || $bot_retention_days < $retention_days)) {
         $cutoff = date('Y-m-d H:i:s', strtotime('-'.$bot_retention_days.' days'));
-        $tracker_db->delete('raw_hits', ['ts[<]' => $cutoff, 'bot_reason[!]' => null]);
+        $tracker_raw_db->delete('raw_hits', ['ts[<]' => $cutoff, 'bot_reason[!]' => null]);
     }
 }
 

@@ -1,17 +1,24 @@
 <?php
 
-include __DIR__.'/schema.php';
+require_once __DIR__.'/schema.php';
 
     // update
     echo '<p class="alert alert-info">We try to update version: '.$addon_info['addon']['version'].'</p>';
 
     $tables = TrackerSchema::getTables();
 
-    // 1. Update/Create all tables with current schema
+    // 1. Update/Create all tables with current schema - main file and, if
+    // it could be opened, the raw file (global/bootstrap.php sets up and
+    // migrates $tracker_raw_db before this runs).
     foreach ($tables as $table_name => $columns) {
         tr_updateOrCreateTable($table_name, $columns);
     }
-    $tracker_db->query("CREATE INDEX IF NOT EXISTS idx_raw_hits_ts ON raw_hits (ts)")->execute();
+    if (isset($tracker_raw_db)) {
+        foreach (TrackerSchema::getRawTables() as $table_name => $columns) {
+            tr_updateOrCreateTable($table_name, $columns, $tracker_raw_db);
+        }
+        $tracker_raw_db->query("CREATE INDEX IF NOT EXISTS idx_raw_hits_ts ON raw_hits (ts)")->execute();
+    }
 
     // 2. 1.1.0: the old pipe-separated regex (bot_filter_patterns) became a
     // plain-text list (bot_custom_patterns) on top of the built-in defaults
