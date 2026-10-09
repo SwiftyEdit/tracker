@@ -37,6 +37,9 @@ only one or a few pages, no language, no Sec-Fetch headers.
 4. If the user agent looks like a regular, current browser, a pattern won't help. Hits like that
    are caught by the header filter (see *Settings*). Outdated Chrome versions are caught
    automatically.
+5. If the hits have long query strings with many filter values and almost every hit is its own
+   "visitor", it's a crawler walking the product filter. That's what the setting *Treat as bot
+   from this many filter values* is for.
 
 ## Notes
 

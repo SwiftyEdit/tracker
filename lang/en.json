@@ -116,5 +116,9 @@
   "hint_bot_outdated_filter": "Chrome, Edge and Opera update themselves automatically. A user agent with a Chrome version about three years old practically always comes from a scraper with a hardcoded user agent. The current version is about %d; everything below %d counts as a bot. The threshold moves along automatically. This also affects computers that no longer get updates (Windows 7/8, very old macOS versions) - a negligible share today.",
   "label_outdated_threshold": "Chrome below version %d counts as a bot",
   "label_reason_old_chrome": "Outdated Chrome",
-  "status_old_chrome": "Bot: outdated Chrome"
+  "status_old_chrome": "Bot: outdated Chrome",
+  "label_bot_query_values": "Treat as bot from this many filter values per request (0 = off)",
+  "hint_bot_query_values": "Crawlers often walk through every combination of a product filter: each combination is a new URL, and each request comes from a different IP address with a different browser user agent. All values in the query string are counted, a parameter with several comma-separated values counts several times. Tracking parameters (utm_*, gclid, fbclid etc.) don't count. Real visitors rarely set more than two or three filters at once.",
+  "label_reason_query_values": "Many filter values",
+  "status_query_values": "Bot: many filter values"
 }

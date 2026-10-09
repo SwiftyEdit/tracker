@@ -26,8 +26,9 @@ return [
         // see tr_bot_reason().
         'has_sec_fetch' => 'INTEGER NULL',
         // NULL = counted as a visitor. Otherwise why it was classified as a
-        // bot ("no_ua", "ua:<pattern>", "no_lang", "no_sec_fetch") - such
-        // rows are kept for the "Rohdaten" tab but never aggregated.
+        // bot ("no_ua", "ua:<pattern>", "old_chrome", "no_lang",
+        // "no_sec_fetch", "query_values") - such rows are kept for the
+        // "Rohdaten" tab but never aggregated.
         'bot_reason' => 'VARCHAR(120) NULL',
         // Resolved at capture time against ip_ranges (only when
         // geoip_enabled is on) - the raw IP itself is never stored, see

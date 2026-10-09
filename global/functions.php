@@ -331,6 +331,10 @@ function tr_get_default_settings(): array {
         // Chromium UAs ~3 years behind the current Chrome version count as
         // bots - real Chrome auto-updates, scrapers often hardcode an old UA.
         'bot_outdated_filter' => 1,
+        // Hits whose query string carries at least this many filter values
+        // count as bots (0 = off) - crawlers walking every combination of a
+        // shop's product filter, see tr_query_value_count().
+        'bot_query_values' => 5,
         // Bot hits are kept in raw_hits (so they can be inspected under
         // "Rohdaten"), but only this long - they never reach the stats.
         'bot_retention_days' => 14,
@@ -400,6 +404,7 @@ function tr_bot_rules(array $settings): array {
         'enabled' => !empty($settings['bot_filter_enabled']),
         'header_filter' => !empty($settings['bot_header_filter']),
         'outdated_filter' => !empty($settings['bot_outdated_filter']),
+        'max_query_values' => max(0, (int) ($settings['bot_query_values'] ?? 0)),
         // Computed once here, not per hit.
         'chrome_min_major' => tr_chrome_min_major(),
         'patterns' => array_values(array_unique(array_merge(tr_default_bot_patterns(), tr_custom_bot_patterns($settings)))),
@@ -416,8 +421,10 @@ function tr_bot_rules(array $settings): array {
  *                                an HTTPS request, null = can't tell (plain
  *                                HTTP - browsers only send them over HTTPS -
  *                                or a hit recorded before 1.1.0)
+ * @param string   $query_string  without the leading "?", see
+ *                                tr_query_value_count()
  */
-function tr_bot_reason(string $ua, string $accept_language, ?int $has_sec_fetch, array $rules): ?string {
+function tr_bot_reason(string $ua, string $accept_language, ?int $has_sec_fetch, string $query_string, array $rules): ?string {
     if (!$rules['enabled']) {
         return null;
     }
@@ -442,7 +449,55 @@ function tr_bot_reason(string $ua, string $accept_language, ?int $has_sec_fetch,
             return 'no_sec_fetch';
         }
     }
+    if ($rules['max_query_values'] > 0 && tr_query_value_count($query_string) >= $rules['max_query_values']) {
+        return 'query_values';
+    }
     return null;
+}
+
+/**
+ * Query parameters added by ad/analytics/newsletter tools - never counted
+ * by tr_query_value_count(), so a tagged campaign link (utm_source +
+ * utm_medium + utm_campaign + gclid ...) isn't mistaken for a crawler.
+ * Anything starting with utm_ is skipped as well.
+ */
+function tr_tracking_params(): array {
+    return [
+        'gclid', 'gbraid', 'wbraid', 'gad_source', 'gad_campaignid', 'dclid',
+        'msclkid', 'fbclid', 'igshid', 'ttclid', 'twclid', 'li_fat_id', 'yclid',
+        'srsltid', 'mc_cid', 'mc_eid', '_ga', '_gl',
+    ];
+}
+
+/**
+ * Number of filter values in a query string: one per parameter, plus one
+ * per extra comma-separated value ("a=1,2&b=3" = 3). Tracking parameters
+ * (tr_tracking_params()) don't count.
+ *
+ * Real visitors rarely set more than two or three filters at once.
+ * Crawlers walking a shop's product filter request ever new combinations
+ * of five and more, from rotating IPs with rotating browser user agents -
+ * on live data, 0.1% of such hits sent a German Accept-Language on a
+ * German-only shop (2026-10-09).
+ */
+function tr_query_value_count(string $query_string): int {
+    if ($query_string === '') {
+        return 0;
+    }
+    $tracking = tr_tracking_params();
+    $count = 0;
+    foreach (explode('&', $query_string) as $pair) {
+        if ($pair === '') {
+            continue;
+        }
+        [$name, $value] = array_pad(explode('=', $pair, 2), 2, '');
+        $name = strtolower(urldecode($name));
+        if (str_starts_with($name, 'utm_') || in_array($name, $tracking, true)) {
+            continue;
+        }
+        $count += 1 + substr_count(urldecode($value), ',');
+    }
+    return $count;
 }
 
 /**
@@ -639,17 +694,18 @@ function tr_capture_hit(array $context = []): void {
     $accept_language = (string) ($_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '');
     $has_sec_fetch = tr_request_sec_fetch_flag();
 
-    // Bots are stored too (flagged, never aggregated) instead of being
-    // dropped here - otherwise the admin can't see what got filtered, and
-    // can't re-evaluate older hits after changing the rules. They're purged
-    // after bot_retention_days, see tr_purge_old_raw_hits().
-    $bot_reason = tr_bot_reason($ua, $accept_language, $has_sec_fetch, tr_bot_rules($settings));
-
-    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
     $uri = (string) ($_SERVER['REQUEST_URI'] ?? '/');
     $parts = explode('?', $uri, 2);
     $url = $parts[0] ?: '/';
     $query_string = $parts[1] ?? '';
+
+    // Bots are stored too (flagged, never aggregated) instead of being
+    // dropped here - otherwise the admin can't see what got filtered, and
+    // can't re-evaluate older hits after changing the rules. They're purged
+    // after bot_retention_days, see tr_purge_old_raw_hits().
+    $bot_reason = tr_bot_reason($ua, $accept_language, $has_sec_fetch, $query_string, tr_bot_rules($settings));
+
+    $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
 
     // GeoIP has to run here, inline, rather than being deferred to
     // aggregation like everything else - it needs the raw IP as input, and
@@ -905,7 +961,7 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
         }
     };
 
-    $sql = 'SELECT id, ts, user_agent, accept_language, has_sec_fetch, bot_reason FROM raw_hits WHERE id > :last_id'
+    $sql = 'SELECT id, ts, query_string, user_agent, accept_language, has_sec_fetch, bot_reason FROM raw_hits WHERE id > :last_id'
         .($extra_sql !== '' ? ' AND ('.$extra_sql.')' : '')
         .' ORDER BY id ASC LIMIT 5000';
 
@@ -930,7 +986,7 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
             $last_id = (int) $r['id'];
             $checked++;
             $sec_fetch = $r['has_sec_fetch'] === null ? null : (int) $r['has_sec_fetch'];
-            $new = tr_bot_reason((string) $r['user_agent'], (string) $r['accept_language'], $sec_fetch, $rules);
+            $new = tr_bot_reason((string) $r['user_agent'], (string) $r['accept_language'], $sec_fetch, (string) $r['query_string'], $rules);
             $old = ($r['bot_reason'] ?? '') !== '' ? $r['bot_reason'] : null;
             if ($new !== $old) {
                 $updates[$new ?? ''][] = $last_id;

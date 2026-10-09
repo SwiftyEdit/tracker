@@ -59,6 +59,14 @@ function tr_render_bot_card(string $message = ''): string {
     $h .= '<div class="small text-muted mb-3 ms-5">'
         .sprintf($addon_lang['label_outdated_threshold'], tr_chrome_min_major()).$count_badge('old_chrome')
         .'</div>';
+
+    $h .= '<div class="mb-3">';
+    $h .= '<label class="form-label" for="trBotQueryValues">'.$addon_lang['label_bot_query_values'].tr_hint_icon($addon_lang['hint_bot_query_values']).'</label>';
+    $h .= '<div class="d-flex align-items-center gap-2">';
+    $h .= '<input type="number" min="0" max="100" class="form-control" id="trBotQueryValues" name="bot_query_values" value="'.(int) ($settings['bot_query_values'] ?? 0).'" style="max-width:160px">';
+    $h .= '<span class="small text-muted">'.$addon_lang['label_reason_query_values'].$count_badge('query_values').'</span>';
+    $h .= '</div>';
+    $h .= '</div>';
     $h .= '<div class="mb-3">';
     $h .= '<label class="form-label">'.$addon_lang['label_bot_retention_days'].tr_hint_icon($addon_lang['hint_bot_retention_days']).'</label>';
     $h .= '<input type="number" min="0" class="form-control" name="bot_retention_days" value="'.(int) ($settings['bot_retention_days'] ?? 14).'" style="max-width:160px">';

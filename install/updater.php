@@ -50,6 +50,7 @@ require_once __DIR__.'/schema.php';
     // default) without touching settings the admin already changed.
     // has(), not get(): a stored "0" is falsy and would trip the UNIQUE key.
     $defaultSettings = tr_get_default_settings();
+    $new_query_rule = !$tracker_db->has('settings', ['key' => 'bot_query_values']);
     foreach ($defaultSettings as $key => $value) {
         if (!$tracker_db->has('settings', ['key' => $key])) {
             $tracker_db->insert('settings', [
@@ -57,6 +58,16 @@ require_once __DIR__.'/schema.php';
                 'value' => (string) $value,
             ]);
         }
+    }
+
+    // 3b. 1.1.2: the filter-values rule starts out enabled - re-evaluate the
+    // stored hits once so the days already counted get corrected too, not
+    // just new ones. Chunked and committed per chunk, frontend hits keep
+    // flowing meanwhile (see tr_reclassify_raw_hits()).
+    if ($new_query_rule && isset($tracker_raw_db)) {
+        @set_time_limit(300);
+        $r = tr_reclassify_raw_hits();
+        echo '<p class="alert alert-info">Re-evaluated '.$r['checked'].' raw hits: '.$r['changed'].' changed, '.$r['days'].' days recomputed.</p>';
     }
 
     // 4. Update version

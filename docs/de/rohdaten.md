@@ -38,6 +38,9 @@ IP-Adressen), oft nur eine oder wenige Seiten, keine Sprache, keine Sec-Fetch-He
 4. Sieht der User-Agent aus wie ein normaler, aktueller Browser, hilft kein Muster. Solche Aufrufe
    erkennt der Header-Filter (siehe *Einstellungen*). Veraltete Chrome-Versionen werden automatisch
    erkannt.
+5. Haben die Aufrufe lange Query-Strings mit vielen Filterwerten und fast jeder Aufruf einen eigenen
+   „Besucher“, ist es ein Crawler, der den Produktfilter abgrast. Dafür gibt es die Einstellung
+   *Als Bot werten ab so vielen Filterwerten*.
 
 ## Hinweise
 

@@ -111,13 +111,16 @@ if (array_intersect($tr_bot_handlers, array_keys($_POST))) {
         $enabled = isset($_POST['bot_filter_enabled']) ? 1 : 0;
         $header_filter = isset($_POST['bot_header_filter']) ? 1 : 0;
         $outdated_filter = isset($_POST['bot_outdated_filter']) ? 1 : 0;
+        $query_values = min(100, max(0, (int) ($_POST['bot_query_values'] ?? 0)));
         $rules_changed = $enabled !== (int) ($settings['bot_filter_enabled'] ?? 0)
             || $header_filter !== (int) ($settings['bot_header_filter'] ?? 0)
-            || $outdated_filter !== (int) ($settings['bot_outdated_filter'] ?? 0);
+            || $outdated_filter !== (int) ($settings['bot_outdated_filter'] ?? 0)
+            || $query_values !== (int) ($settings['bot_query_values'] ?? 0);
 
         tr_save_setting('bot_filter_enabled', $enabled);
         tr_save_setting('bot_header_filter', $header_filter);
         tr_save_setting('bot_outdated_filter', $outdated_filter);
+        tr_save_setting('bot_query_values', $query_values);
         tr_save_setting('bot_retention_days', max(0, (int) ($_POST['bot_retention_days'] ?? 14)));
 
         $msg = $addon_lang['msg_saved'];

@@ -38,6 +38,14 @@ sich aber im Tab **Rohdaten** nachprüfen.
   User-Agent. Die Grenze wird aus dem Release-Rhythmus von Chrome berechnet und wandert automatisch
   mit, die Karte zeigt die aktuelle Grenze an. Betroffen sind auch Rechner ohne Updates (Windows 7/8,
   sehr alte macOS-Versionen), deren Anteil ist heute verschwindend gering.
+- **Als Bot werten ab so vielen Filterwerten im Aufruf** (Voreinstellung 5, 0 = aus): Manche
+  Crawler probieren alle Kombinationen eines Produktfilters durch, z. B.
+  `?typ=datenlogger&temperaturbereich-max=80-deg-c&anzahl-fuehler=mehrfach&…`. Jede Kombination
+  ist eine neue URL, jeder Aufruf kommt von einer anderen IP-Adresse mit einem anderen, aktuellen
+  Browser-User-Agent. Weder Muster noch Header-Filter erkennen sie. Gezählt werden alle Werte im
+  Query-String, ein Parameter mit mehreren kommagetrennten Werten (`messwerte=licht,schock`) zählt
+  mehrfach. Tracking-Parameter wie `utm_*`, `gclid` oder `fbclid` zählen nicht mit, Kampagnen-Links
+  bleiben also unberührt. Echte Besucher setzen selten mehr als zwei oder drei Filter gleichzeitig.
 - **Eigene Muster**: Texte, die im User-Agent vorkommen (kein Regex, Groß-/Kleinschreibung egal).
   Jedes Muster zeigt, wie viele Aufrufe in den aktuellen Rohdaten es erkannt hat. Am einfachsten
   fügt man sie im Tab **Rohdaten** über „Als Bot markieren“ hinzu.

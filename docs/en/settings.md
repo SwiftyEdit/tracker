@@ -37,6 +37,14 @@ the **Raw data** tab.
   threshold is derived from Chrome's release cadence and moves along automatically; the card shows
   the current one. Computers without updates (Windows 7/8, very old macOS versions) are affected
   too - a negligible share today.
+- **Treat as bot from this many filter values per request** (default 5, 0 = off): some crawlers
+  walk through every combination of a product filter, e.g.
+  `?type=datalogger&temp-max=80-deg-c&probes=multiple&…`. Each combination is a new URL, each
+  request comes from a different IP address with a different, current browser user agent. Neither
+  patterns nor the header filter catch them. All values in the query string are counted, a
+  parameter with several comma-separated values (`values=light,shock`) counts several times.
+  Tracking parameters such as `utm_*`, `gclid` or `fbclid` don't count, so campaign links are
+  unaffected. Real visitors rarely set more than two or three filters at once.
 - **Custom patterns**: texts contained in the user agent (no regex, case-insensitive). Each
   pattern shows how many hits in the current raw data it caught. The easiest way to add one is
   "Mark as bot" in the **Raw data** tab.
