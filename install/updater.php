@@ -51,6 +51,7 @@ require_once __DIR__.'/schema.php';
     // has(), not get(): a stored "0" is falsy and would trip the UNIQUE key.
     $defaultSettings = tr_get_default_settings();
     $new_query_rule = !$tracker_db->has('settings', ['key' => 'bot_query_values']);
+    $utc_days = !$tracker_db->has('settings', ['key' => 'day_boundaries']);
     foreach ($defaultSettings as $key => $value) {
         if (!$tracker_db->has('settings', ['key' => $key])) {
             $tracker_db->insert('settings', [
@@ -68,6 +69,15 @@ require_once __DIR__.'/schema.php';
         @set_time_limit(300);
         $r = tr_reclassify_raw_hits();
         echo '<p class="alert alert-info">Re-evaluated '.$r['checked'].' raw hits: '.$r['changed'].' changed, '.$r['days'].' days recomputed.</p>';
+    }
+
+    // 3c. 1.1.2: days in daily_* became site-local days instead of UTC days.
+    // Recompute every day raw_hits still fully covers; older days keep
+    // their UTC-based totals (their hits are gone).
+    if ($utc_days && isset($tracker_raw_db)) {
+        @set_time_limit(300);
+        $n = tr_recompute_all_days();
+        echo '<p class="alert alert-info">Recomputed '.$n.' days in local time.</p>';
     }
 
     // 4. Update version

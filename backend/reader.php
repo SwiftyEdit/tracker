@@ -294,9 +294,10 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     $read_url = fn(array $override = []) => '/admin-xhr/addons/plugin/tracker/read/?'.http_build_query(array_merge($state, $override));
     $hx = fn(array $override) => 'hx-get="'.htmlspecialchars($read_url($override), ENT_QUOTES).'" hx-target="#trRawContent" hx-swap="innerHTML"';
 
-    // ts is stored as UTC (SQLite CURRENT_TIMESTAMP), compared as text.
+    // ts is stored as UTC (SQLite CURRENT_TIMESTAMP), compared as text -
+    // the site-local days picked here are converted, see tr_utc_to_local().
     $where = ['ts >= :from', 'ts < :to_excl'];
-    $params = [':from' => $from, ':to_excl' => date('Y-m-d', strtotime($to.' +1 day'))];
+    $params = [':from' => tr_local_day_utc_range($from)[0], ':to_excl' => tr_local_day_utc_range($to)[1]];
     if ($f_url !== '') {
         $where[] = "url LIKE :url ESCAPE '\\'";
         $params[':url'] = tr_like_contains($f_url);
@@ -348,7 +349,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
     $nf = fn($n) => number_format((int) $n, 0, ',', '.');
 
     $earliest = $tracker_raw_db->query('SELECT MIN(ts) FROM raw_hits')->fetchColumn();
-    echo '<p class="small text-muted mb-2">'.sprintf($addon_lang['label_raw_available'], $earliest ? date('d.m.Y', strtotime($earliest)) : '-').'</p>';
+    echo '<p class="small text-muted mb-2">'.sprintf($addon_lang['label_raw_available'], $earliest ? tr_utc_to_local((string) $earliest, 'd.m.Y') : '-').'</p>';
 
     $stat = fn($value, $label, $status_link = null) => '<div class="col-6 col-md"><div class="card text-center p-2 h-100">'
         .'<div class="fs-4">'.($status_link ? '<a href="#" onclick="return false;" '.$hx(['status' => $status_link]).'>'.$value.'</a>' : $value).'</div>'
@@ -484,7 +485,7 @@ if (isset($_GET['show']) && $_GET['show'] === 'raw_data') {
             $page = (string) $r['url'].((string) $r['query_string'] !== '' ? '?'.$r['query_string'] : '');
             $sec_fetch = $r['has_sec_fetch'] === null ? '<span class="text-muted">–</span>' : ((int) $r['has_sec_fetch'] === 1 ? '<i class="bi bi-check-lg text-success"></i>' : '<i class="bi bi-x-lg text-danger"></i>');
             echo '<tr>';
-            echo '<td class="text-nowrap">'.htmlspecialchars((string) $r['ts']).'</td>';
+            echo '<td class="text-nowrap">'.htmlspecialchars(tr_utc_to_local((string) $r['ts'])).'</td>';
             echo '<td style="max-width:260px;word-break:break-all;">'.htmlspecialchars($page).'</td>';
             echo '<td style="max-width:200px;word-break:break-all;">'.htmlspecialchars((string) $r['referrer']).'</td>';
             echo '<td style="max-width:320px;word-break:break-all;">'.htmlspecialchars((string) $r['user_agent']).'</td>';

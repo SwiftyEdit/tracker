@@ -62,7 +62,7 @@
   "status_no_ua": "Bot: no user agent",
   "status_pattern": "Bot: by pattern",
   "btn_reset": "Reset",
-  "label_raw_available": "Raw data available from %s. Times in UTC.",
+  "label_raw_available": "Raw data available from %s.",
   "label_raw_hits": "Hits",
   "label_visitor_hashes": "Visitors",
   "view_agents": "By user agent",

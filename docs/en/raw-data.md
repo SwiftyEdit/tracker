@@ -43,7 +43,7 @@ only one or a few pages, no language, no Sec-Fetch headers.
 
 ## Notes
 
-- Times are shown in UTC.
+- Times and days follow the time zone set in the SwiftyEdit settings.
 - Raw data only exists for the configured retention period, detected bots only for the bot
   retention period.
 - The IP address isn't shown here either, since it is never stored.

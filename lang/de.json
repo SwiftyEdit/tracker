@@ -62,7 +62,7 @@
   "status_no_ua": "Bot: ohne User-Agent",
   "status_pattern": "Bot: per Muster",
   "btn_reset": "Zurücksetzen",
-  "label_raw_available": "Rohdaten vorhanden ab %s. Zeiten in UTC.",
+  "label_raw_available": "Rohdaten vorhanden ab %s.",
   "label_raw_hits": "Aufrufe",
   "label_visitor_hashes": "Besucher",
   "view_agents": "Nach User-Agent",

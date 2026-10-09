@@ -279,6 +279,87 @@ function tr_backup_main_db(): void {
     }
 }
 
+/* -------------------------------------------------------------------
+ * Time zones: raw_hits.ts is UTC (SQLite's CURRENT_TIMESTAMP) - unambiguous,
+ * also in the hour that repeats when clocks go back. Everything a person
+ * reads is in the site's own time zone instead: the days in daily_*, the
+ * raw data tab, the visitor hash's day. SwiftyEdit sets that zone from its
+ * settings (date_default_timezone_set()) in every context this plugin runs
+ * in - frontend, admin pages and /admin-xhr/ - so date() is site-local.
+ * ---------------------------------------------------------------- */
+
+/**
+ * UTC "Y-m-d H:i:s" (raw_hits.ts) -> site-local, in $format. Cached per
+ * minute - every UTC offset in use is a multiple of 15 minutes, and
+ * reclassification calls this for every row.
+ */
+function tr_utc_to_local(string $ts, string $format = 'Y-m-d H:i:s'): string {
+    static $cache = [];
+    $key = substr($ts, 0, 16).'|'.$format;
+    if (!isset($cache[$key])) {
+        if (count($cache) > 10000) {
+            $cache = [];
+        }
+        $dt = new \DateTimeImmutable($ts, new \DateTimeZone('UTC'));
+        $cache[$key] = $dt->setTimezone(new \DateTimeZone(date_default_timezone_get()))->format($format);
+    }
+    return $cache[$key];
+}
+
+/**
+ * Site-local "Y-m-d" or "Y-m-d H:i:s" -> UTC "Y-m-d H:i:s", for comparing
+ * against raw_hits.ts.
+ */
+function tr_local_to_utc(string $local): string {
+    $dt = new \DateTimeImmutable($local, new \DateTimeZone(date_default_timezone_get()));
+    return $dt->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s');
+}
+
+/**
+ * [start, end) of a site-local calendar day in UTC. Not always 24 hours
+ * apart - 23 or 25 on the days the clocks change.
+ *
+ * @return array{0:string, 1:string}
+ */
+function tr_local_day_utc_range(string $date): array {
+    return [tr_local_to_utc($date), tr_local_to_utc(date('Y-m-d', strtotime($date.' +1 day')))];
+}
+
+/**
+ * Site-local "Y-m-d" of the oldest day raw_hits still fully covers -
+ * anything older is partly purged already (retention_days) and must keep
+ * its existing totals instead of being recomputed from what's left.
+ * '' = retention off, every day is complete.
+ */
+function tr_oldest_complete_day(array $settings): string {
+    $retention_days = (int) ($settings['retention_days'] ?? 90);
+    return $retention_days > 0 ? date('Y-m-d', strtotime('-'.($retention_days - 1).' days')) : '';
+}
+
+/**
+ * Recomputes every day raw_hits still fully covers - after day boundaries
+ * changed (1.1.2 switched from UTC to site-local days, see the updater).
+ *
+ * @return int days recomputed
+ */
+function tr_recompute_all_days(): int {
+    global $tracker_raw_db;
+
+    $first = $tracker_raw_db->query('SELECT MIN(ts) FROM raw_hits')->fetchColumn();
+    if (!$first) {
+        return 0;
+    }
+    $date = max(tr_utc_to_local((string) $first, 'Y-m-d'), tr_oldest_complete_day(tr_get_settings()));
+    $today = date('Y-m-d');
+    $n = 0;
+    while ($date <= $today) {
+        tr_recompute_day($date);
+        $n++;
+        $date = date('Y-m-d', strtotime($date.' +1 day'));
+    }
+    return $n;
+}
+
 function tr_get_settings(): array {
     global $tracker_db;
 
@@ -350,6 +431,9 @@ function tr_get_default_settings(): array {
         'last_aggregated_at' => 0,
         // Date of the last daily snapshot, see tr_backup_main_db().
         'last_backup_date' => '',
+        // Days in daily_* are site-local days (before 1.1.2: UTC days) -
+        // install/updater.php recomputes once when this is missing.
+        'day_boundaries' => 'local',
     ];
 }
 
@@ -775,7 +859,8 @@ function tr_capture_hit(array $context = []): void {
  * identifier. Two hits from the same IP+UA on the same day hash identically
  * (so aggregation can count unique visitors and attribute a campaign source
  * to only the first hit of a same-day visit); the next day, the same
- * visitor gets a different hash.
+ * visitor gets a different hash. "Day" is the site-local day, the same one
+ * the stats use (see tr_utc_to_local()).
  */
 function tr_visitor_hash(string $ip, string $ua, string $salt): string {
     return hash('sha256', $ip.'|'.$ua.'|'.date('Y-m-d').'|'.$salt);
@@ -905,12 +990,21 @@ function tr_aggregate_pending(): void {
     }
 
     if ($max_id > $watermark) {
-        $dates = $tracker_raw_db->query(
-            'SELECT DISTINCT substr(ts, 1, 10) FROM raw_hits WHERE id > :wm AND id <= :max',
+        // Distinct UTC hours, mapped to site-local days. Start and end of
+        // each hour, since with a half-hour offset one UTC hour can span
+        // two local days.
+        $hours = $tracker_raw_db->query(
+            'SELECT DISTINCT substr(ts, 1, 13) FROM raw_hits WHERE id > :wm AND id <= :max',
             [':wm' => $watermark, ':max' => $max_id]
         )->fetchAll(\PDO::FETCH_COLUMN);
 
-        foreach ($dates as $date) {
+        $dates = [];
+        foreach ($hours as $hour) {
+            $dates[tr_utc_to_local($hour.':00:00', 'Y-m-d')] = true;
+            $dates[tr_utc_to_local($hour.':59:59', 'Y-m-d')] = true;
+        }
+
+        foreach (array_keys($dates) as $date) {
             tr_recompute_day((string) $date);
         }
 
@@ -942,11 +1036,7 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
     $pending = [];   // date => true, changed but not recomputed yet
     $recomputed = 0;
 
-    // The oldest day may already be partly purged by retention_days -
-    // recomputing it from what's left would undercount it, so it (and
-    // anything older) keeps its existing totals.
-    $retention_days = (int) ($settings['retention_days'] ?? 90);
-    $oldest_complete = $retention_days > 0 ? date('Y-m-d', strtotime('-'.($retention_days - 1).' days')) : '';
+    $oldest_complete = tr_oldest_complete_day($settings);
 
     $recompute = function (?string $before) use (&$pending, &$recomputed, $oldest_complete) {
         foreach (array_keys($pending) as $date) {
@@ -979,7 +1069,7 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
         // is fully re-evaluated - recompute it now rather than at the end.
         // A run that dies halfway (time limit) then leaves stats matching
         // the bot flags already committed, except for the day in progress.
-        $recompute(substr((string) $rows[0]['ts'], 0, 10));
+        $recompute(tr_utc_to_local((string) $rows[0]['ts'], 'Y-m-d'));
 
         $updates = []; // new reason ('' = human) => [ids]
         foreach ($rows as $r) {
@@ -990,7 +1080,7 @@ function tr_reclassify_raw_hits(string $extra_sql = '', array $extra_params = []
             $old = ($r['bot_reason'] ?? '') !== '' ? $r['bot_reason'] : null;
             if ($new !== $old) {
                 $updates[$new ?? ''][] = $last_id;
-                $pending[substr((string) $r['ts'], 0, 10)] = true;
+                $pending[tr_utc_to_local((string) $r['ts'], 'Y-m-d')] = true;
                 $changed++;
             }
         }
@@ -1041,14 +1131,14 @@ function tr_bot_reason_label(?string $reason, array $lang): string {
 function tr_recompute_day(string $date): void {
     global $tracker_db, $tracker_raw_db;
 
-    // Half-open range instead of LIKE 'date%' so the ts index can be used.
-    // Iterated row by row instead of select()'s fetchAll() - a busy day
+    // $date is a site-local day, ts is UTC - see tr_local_day_utc_range().
+    // Half-open range so the ts index can be used. Iterated row by row instead of select()'s fetchAll() - a busy day
     // holds tens of thousands of hits, which as one array blew past a
     // 128M memory_limit and killed the whole overview page.
     $stmt = $tracker_raw_db->query(
         'SELECT visitor_hash, url, user_agent, country_code, referrer, query_string, bot_reason
          FROM raw_hits WHERE ts >= :from AND ts < :to ORDER BY id ASC',
-        [':from' => $date, ':to' => date('Y-m-d', strtotime($date.' +1 day'))]
+        array_combine([':from', ':to'], tr_local_day_utc_range($date))
     );
     $stmt->setFetchMode(\PDO::FETCH_ASSOC);
 
@@ -1102,6 +1192,15 @@ function tr_recompute_day(string $date): void {
         }
     }
     $stmt->closeCursor();
+
+    // Bot hits are purged much earlier than the rest (bot_retention_days).
+    // For a day already past that window, what's left would undercount
+    // them - keep the stored count instead (also keeps a day that only had
+    // bot hits from vanishing).
+    $bot_retention_days = (int) ($settings['bot_retention_days'] ?? 14);
+    if ($bot_retention_days > 0 && $date < date('Y-m-d', strtotime('-'.($bot_retention_days - 1).' days'))) {
+        $bots = max($bots, (int) $tracker_db->get('daily_totals', 'bots', ['date' => $date]));
+    }
     $has_rows = ($pageviews + $bots) > 0;
 
     // Replace the day in one transaction: readers never see it half
@@ -1158,11 +1257,12 @@ function tr_bump_breakdown(array &$acc, string $dimension, string $value): void 
 function tr_purge_old_raw_hits(int $retention_days, int $bot_retention_days = 14): void {
     global $tracker_raw_db;
     if ($retention_days > 0) {
-        $cutoff = date('Y-m-d H:i:s', strtotime('-'.$retention_days.' days'));
+        // ts is UTC - see tr_utc_to_local().
+        $cutoff = gmdate('Y-m-d H:i:s', strtotime('-'.$retention_days.' days'));
         $tracker_raw_db->delete('raw_hits', ['ts[<]' => $cutoff]);
     }
     if ($bot_retention_days > 0 && ($retention_days <= 0 || $bot_retention_days < $retention_days)) {
-        $cutoff = date('Y-m-d H:i:s', strtotime('-'.$bot_retention_days.' days'));
+        $cutoff = gmdate('Y-m-d H:i:s', strtotime('-'.$bot_retention_days.' days'));
         $tracker_raw_db->delete('raw_hits', ['ts[<]' => $cutoff, 'bot_reason[!]' => null]);
     }
 }

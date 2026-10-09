@@ -44,7 +44,7 @@ IP-Adressen), oft nur eine oder wenige Seiten, keine Sprache, keine Sec-Fetch-He
 
 ## Hinweise
 
-- Zeiten sind in UTC angegeben.
+- Zeiten und Tage richten sich nach der Zeitzone in den SwiftyEdit-Einstellungen.
 - Rohdaten gibt es nur für den eingestellten Aufbewahrungszeitraum, erkannte Bots nur für die
   Bot-Aufbewahrungsdauer.
 - Die IP-Adresse wird auch hier nicht angezeigt, weil sie nie gespeichert wird.
